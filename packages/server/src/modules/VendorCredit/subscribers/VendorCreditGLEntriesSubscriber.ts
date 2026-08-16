@@ -68,16 +68,18 @@ export class VendorCreditGlEntriesSubscriber {
    * Reverts the GL entries once vendor credit deleted.
    * @param {IVendorCreditDeletedPayload} payload -
    */
-  @OnEvent(events.vendorCredit.onDeleted)
+  @OnEvent(events.vendorCredit.onDeleted, { suppressErrors: false })
   public async revertGLEntriesOnceDeleted({
     vendorCreditId,
     oldVendorCredit,
+    trx,
   }: IVendorCreditDeletedPayload): Promise<void> {
     // Can't continue of the vendor credit is not open yet.
     if (!oldVendorCredit.isPublished) return;
 
     await this.vendorCreditGLEntries.revertVendorCreditGLEntries(
       vendorCreditId,
+      trx,
     );
   }
 }

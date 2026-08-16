@@ -53,8 +53,11 @@ export class InvoicePaymentsGLEntriesRewrite {
     invoiceId: number,
     trx?: Knex.Transaction,
   ) => {
+    // Must read through the owning transaction: the invoice edit that triggers
+    // this rewrite has already mutated payment entries inside `trx`, and a read
+    // on a pooled connection would miss them and rewrite the wrong set.
     const invoicePaymentEntries = await this.paymentReceivedEntryModel()
-      .query()
+      .query(trx)
       .where('invoiceId', invoiceId);
 
     const paymentsIds = invoicePaymentEntries.map((e) => e.paymentReceiveId);
