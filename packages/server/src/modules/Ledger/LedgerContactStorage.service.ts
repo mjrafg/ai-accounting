@@ -1,10 +1,5 @@
-import * as async from 'async';
 import { Knex } from 'knex';
-import {
-  ILedger,
-  ILedgerEntry,
-  ISaleContactsBalanceQueuePayload,
-} from './types/Ledger.types';
+import { ILedger, ILedgerEntry } from './types/Ledger.types';
 import { ACCOUNT_TYPE } from '@/constants/accounts';
 import { Inject, Injectable } from '@nestjs/common';
 import { Contact } from '../Contacts/models/Contact';
@@ -34,31 +29,17 @@ export class LedgerContactsBalanceStorage {
     ledger: ILedger,
     trx?: Knex.Transaction,
   ): Promise<void> => {
-    // Save contact balance queue.
-    const saveContactsBalanceQueue = async.queue(
-      this.saveContactBalanceTask,
-      10,
-    );
     // Retrieves the effected contacts ids.
     const effectedContactsIds = ledger.getContactsIds();
 
-    effectedContactsIds.forEach((contactId: number) => {
-      saveContactsBalanceQueue.push({ contactId, ledger, trx });
-    });
-    if (effectedContactsIds.length > 0) await saveContactsBalanceQueue.drain();
-  };
-
-  /**
-   * Saves the contact balance.
-   * @param {ISaleContactsBalanceQueuePayload} task
-   * @returns {Promise<void>}
-   */
-  private saveContactBalanceTask = async (
-    task: ISaleContactsBalanceQueuePayload,
-  ) => {
-    const { contactId, ledger, trx } = task;
-
-    await this.saveContactBalance(ledger, contactId, trx);
+    // Sequential and awaited on purpose. The previous `async.queue(..., 10)`
+    // drained with `queue.drain()`, which resolves even when a worker threw and
+    // had no `queue.error` handler, so a failed contact balance mutation was
+    // silently swallowed. All mutations run on the same Knex transaction, so
+    // there was no real concurrency to lose.
+    for (const contactId of effectedContactsIds) {
+      await this.saveContactBalance(ledger, contactId, trx);
+    }
   };
 
   /**

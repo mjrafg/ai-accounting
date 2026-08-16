@@ -1,10 +1,6 @@
-import * as async from 'async';
 import { Knex } from 'knex';
 import { uniq } from 'lodash';
-import {
-  ILedger,
-  ISaveAccountsBalanceQueuePayload,
-} from './types/Ledger.types';
+import { ILedger } from './types/Ledger.types';
 import { Inject, Injectable } from '@nestjs/common';
 import { Account } from '../Accounts/models/Account.model';
 import { AccountRepository } from '../Accounts/repositories/Account.repository';
@@ -71,35 +67,19 @@ export class LedegrAccountsStorage {
     ledger: ILedger,
     trx?: Knex.Transaction,
   ): Promise<void> => {
-    // Initiate a new queue for accounts balance mutation.
-    const saveAccountsBalanceQueue = async.queue(
-      this.saveAccountBalanceTask,
-      10,
-    );
     const effectedAccountsIds = ledger.getAccountsIds();
     const dependAccountsIds = await this.findDependantsAccountsIds(
       effectedAccountsIds,
       trx,
     );
-    dependAccountsIds.forEach((accountId: number) => {
-      saveAccountsBalanceQueue.push({ ledger, accountId, trx });
-    });
-    if (dependAccountsIds.length > 0) {
-      await saveAccountsBalanceQueue.drain();
+    // Sequential and awaited on purpose. The previous `async.queue(..., 10)`
+    // drained with `queue.drain()`, which resolves even when a worker threw and
+    // had no `queue.error` handler, so a failed balance mutation was silently
+    // swallowed. All mutations run on the same Knex transaction, so there was
+    // no real concurrency to lose.
+    for (const accountId of dependAccountsIds) {
+      await this.saveAccountBalanceFromLedger(ledger, accountId, trx);
     }
-  };
-
-  /**
-   * Async task mutates the given account balance.
-   * @param   {ISaveAccountsBalanceQueuePayload} task
-   * @returns {Promise<void>}
-   */
-  private saveAccountBalanceTask = async (
-    task: ISaveAccountsBalanceQueuePayload,
-  ): Promise<void> => {
-    const { ledger, accountId, trx } = task;
-
-    await this.saveAccountBalanceFromLedger(ledger, accountId, trx);
   };
 
   /**

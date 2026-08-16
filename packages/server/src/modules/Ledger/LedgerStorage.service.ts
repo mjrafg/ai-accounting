@@ -1,5 +1,5 @@
 import { Knex } from 'knex';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ILedger } from './types/Ledger.types';
 import { LedgerContactsBalanceStorage } from './LedgerContactStorage.service';
 import { LedegrAccountsStorage } from './LedgetAccountStorage.service';
@@ -10,6 +10,8 @@ import { TenantModelProxy } from '../System/models/TenantBaseModel';
 
 @Injectable()
 export class LedgerStorageService {
+  private readonly logger = new Logger(LedgerStorageService.name);
+
   /**
    * @param {LedgerContactsBalanceStorage} ledgerContactsBalance - Ledger contacts balance storage.
    * @param {LedegrAccountsStorage} ledgerAccountsBalance - Ledger accounts balance storage.
@@ -35,17 +37,26 @@ export class LedgerStorageService {
     ledger: ILedger,
     trx?: Knex.Transaction,
   ): Promise<void> => {
-    const tasks = [
-      // Saves the ledger entries.
-      this.ledgerEntriesService.saveEntries(ledger, trx),
+    // Sequential and awaited, not Promise.all: all three storages write on the
+    // same Knex transaction, and a rejection in one of a Promise.all set leaves
+    // the others running. If a later storage fails, the enclosing UnitOfWork
+    // transaction now rolls back the earlier writes as well.
+    try {
+      // 1. Saves the ledger entries.
+      await this.ledgerEntriesService.saveEntries(ledger, trx);
 
-      // Mutates the associated accounts balances.
-      this.ledgerAccountsBalance.saveAccountsBalance(ledger, trx),
+      // 2. Mutates the associated accounts balances.
+      await this.ledgerAccountsBalance.saveAccountsBalance(ledger, trx);
 
-      // Mutates the associated contacts balances.
-      this.ledgerContactsBalance.saveContactsBalance(ledger, trx),
-    ];
-    await Promise.all(tasks);
+      // 3. Mutates the associated contacts balances.
+      await this.ledgerContactsBalance.saveContactsBalance(ledger, trx);
+    } catch (error) {
+      this.logger.error(
+        `LEDGER_WRITE_FAILED operation=commit entries=${ledger.getEntries().length}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   };
 
   /**
@@ -56,17 +67,23 @@ export class LedgerStorageService {
    * @returns {Promise<void>}
    */
   public delete = async (ledger: ILedger, trx?: Knex.Transaction) => {
-    const tasks = [
-      // Deletes the ledger entries.
-      this.ledgerEntriesService.deleteEntries(ledger, trx),
+    // Sequential and awaited, for the same reason as `commit` above.
+    try {
+      // 1. Deletes the ledger entries.
+      await this.ledgerEntriesService.deleteEntries(ledger, trx);
 
-      // Mutates the associated accounts balances.
-      this.ledgerAccountsBalance.saveAccountsBalance(ledger, trx),
+      // 2. Mutates the associated accounts balances.
+      await this.ledgerAccountsBalance.saveAccountsBalance(ledger, trx);
 
-      // Mutates the associated contacts balances.
-      this.ledgerContactsBalance.saveContactsBalance(ledger, trx),
-    ];
-    await Promise.all(tasks);
+      // 3. Mutates the associated contacts balances.
+      await this.ledgerContactsBalance.saveContactsBalance(ledger, trx);
+    } catch (error) {
+      this.logger.error(
+        `LEDGER_WRITE_FAILED operation=delete entries=${ledger.getEntries().length}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   };
 
   /**
