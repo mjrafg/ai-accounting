@@ -17,7 +17,7 @@ export class LandedCostSyncCostTransactionsSubscriber {
    * Increment cost transactions once the landed cost allocated.
    * @param {IAllocatedLandedCostCreatedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onCreated)
+  @OnEvent(events.billLandedCost.onCreated, { suppressErrors: false })
   async incrementCostTransactionsOnceCreated({
     billLandedCost,
     trx,
