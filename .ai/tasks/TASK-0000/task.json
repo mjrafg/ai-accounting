@@ -1,0 +1,21 @@
+{
+  "taskId": "TASK-0000",
+  "title": "Stage 0 — make accounting write failures fail closed",
+  "risk": "high",
+  "state": "READY_TO_MERGE",
+  "branch": "fix/stage0-ledger-failure-propagation",
+  "createdAt": "2026-08-16T00:00:00.000Z",
+  "updatedAt": "2026-08-16T00:00:34.000Z",
+  "reviewRounds": 4,
+  "autoMerge": false,
+  "allowlist": [
+    "packages/server/src/modules/Ledger",
+    "packages/server/src/modules/Tenancy/TenancyDB",
+    "packages/server/src/modules/SaleInvoices",
+    "packages/server/src/modules/CreditNotes",
+    "packages/server/src/modules/VendorCredit",
+    "packages/server/src/modules/PaymentReceived",
+    "packages/server/src/modules/BillLandedCosts",
+    "packages/server/test"
+  ]
+}

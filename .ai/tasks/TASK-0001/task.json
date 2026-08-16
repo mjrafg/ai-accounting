@@ -1,0 +1,13 @@
+{
+  "taskId": "TASK-0001",
+  "title": "Fix Credit Note inventory edit",
+  "risk": "high",
+  "state": "ESCALATED",
+  "branch": "ai/task-0001",
+  "createdAt": "2026-08-16T21:34:46.903Z",
+  "updatedAt": "2026-08-16T21:34:47.279Z",
+  "reviewRounds": 0,
+  "autoMerge": false,
+  "allowlist": [],
+  "lastError": "independent reviewer unavailable: no `codex` executable found on the host or in the bc-node container. Reviewer-provider independence is a hard policy, so the orchestrator will ESCALATE rather than review with Claude. Install the Codex CLI or set AI_CODEX_BIN."
+}
