@@ -1,0 +1,12 @@
+{
+  "maxReviewRounds": 3,
+  "autoMergeRisk": [],
+  "protectedPaths": [
+    "packages/server/src/database/migrations",
+    "packages/server/test/e2e-baseline.json",
+    ".github",
+    ".gitignore",
+    "package.json",
+    "pnpm-lock.yaml"
+  ]
+}

@@ -1,0 +1,5 @@
+# Raw agent transcripts and test logs never enter version control: they are the
+# most likely place for credentials, customer data, or prompt content to leak.
+# Structured events reference them by sha256 hash instead.
+*
+!.gitignore

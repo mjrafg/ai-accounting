@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Autopilot event",
+  "description": "One immutable record in an append-only task log. Records are never rewritten; corrections are new events that reference the record they supersede via `parents`.",
+  "type": "object",
+  "required": ["eventId", "taskId", "seq", "ts", "type", "actor", "parents", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "eventId": { "type": "string", "pattern": "^EV-[0-9a-f]{16}$", "description": "Content hash of the record body; recomputing it detects tampering." },
+    "taskId": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "type": {
+      "type": "string",
+      "enum": ["TASK_CREATED","STATE_TRANSITION","DESIGN_DECISION","DESIGN_REVIEW","IMPLEMENTATION","FINDING","ADJUDICATION","FIX","TEST_RESULT","RUNTIME_EVIDENCE","VERDICT","DEFERRED","ESCALATION","READY_TO_MERGE","MERGED","BACKFILL_GAP","EVIDENCE_CONFLICT","POLICY_BLOCK"]
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["orchestrator","claude-advisor","claude-code","codex","policy-engine","test-runner","acceptance-runner","human","backfill"]
+    },
+    "parents": { "type": "array", "items": { "type": "string" }, "description": "IDs of the claims or findings this event answers." },
+    "payload": { "type": "object", "description": "Sanitized. Raw transcripts live outside version control and are referenced by hash." },
+    "reconstructed": { "type": "boolean" },
+    "reconstructionConfidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+    "source": { "type": "string" },
+    "simulated": { "type": "boolean", "description": "Produced by fixture replay. Never satisfies reviewer independence." }
+  }
+}
