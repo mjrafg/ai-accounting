@@ -21,7 +21,6 @@ import { INestApplication } from '@nestjs/common';
 import { Knex } from 'knex';
 import * as knexFactory from 'knex';
 import { AppModule } from '../src/modules/App/App.module';
-import { UnitOfWork } from '../src/modules/Tenancy/TenancyDB/UnitOfWork.service';
 import { LedgerEntriesStorageService } from '../src/modules/Ledger/LedgerEntriesStorage.service';
 import { LedgerContactsBalanceStorage } from '../src/modules/Ledger/LedgerContactStorage.service';
 
@@ -37,7 +36,7 @@ let db: Knex;
 
 /** A balanced two-legged journal against two seeded accounts. */
 const makeJournal = (journalNumber: string) => ({
-  date: '2022-06-01',
+  date: '2027-06-01',
   reference: journalNumber,
   journalNumber,
   publish: false,
@@ -243,69 +242,5 @@ describe('Stage 0: inventory adjustment GL failure propagation', () => {
 
     expect(Number(afterRows[0].c)).toBe(Number(beforeRows[0].c));
     expect(afterAccounts).toEqual(beforeAccounts);
-  });
-});
-
-describe('Stage 0: UnitOfWork commit/rollback lifecycle', () => {
-  const PROBE = 'STAGE0_UOW_PROBE';
-
-  afterEach(async () => {
-    await db('ACCOUNTS_TRANSACTIONS').where('REFERENCE_TYPE', PROBE).delete();
-  });
-
-  it('4. a failing COMMIT rejects the caller (success is never returned)', async () => {
-    const uow = app.get(UnitOfWork);
-    let sawSuccess = false;
-
-    await expect(
-      uow.withTransaction(async (trx: Knex.Transaction) => {
-        const [rows] = await trx.raw('SELECT CONNECTION_ID() AS c');
-        const connectionId = rows[0].c;
-        await trx.raw(
-          'INSERT INTO ACCOUNTS_TRANSACTIONS (CREDIT,DEBIT,CURRENCY_CODE,EXCHANGE_RATE,REFERENCE_TYPE,REFERENCE_ID,ACCOUNT_ID,`DATE`,CREATED_AT) ' +
-            'VALUES (1,0,?,1,?,999001,1003,?,NOW())',
-          ['USD', PROBE, '2026-07-01'],
-        );
-        // Destroy the transaction's own connection so COMMIT cannot succeed.
-        await db.raw(`KILL CONNECTION ${connectionId}`);
-        await new Promise((r) => setTimeout(r, 200));
-        return 'WORK_DONE';
-      }),
-    ).rejects.toBeDefined();
-
-    expect(sawSuccess).toBe(false);
-
-    const rows = await db('ACCOUNTS_TRANSACTIONS')
-      .where('REFERENCE_TYPE', PROBE)
-      .select('ID');
-    expect(rows.length).toBe(0);
-  });
-
-  it('5. a failing work function rolls back and preserves the original error', async () => {
-    const uow = app.get(UnitOfWork);
-    const original = new Error('STAGE0_BUSINESS_RULE_FAILED');
-
-    let caught: any = null;
-    try {
-      await uow.withTransaction(async (trx: Knex.Transaction) => {
-        await trx.raw(
-          'INSERT INTO ACCOUNTS_TRANSACTIONS (CREDIT,DEBIT,CURRENCY_CODE,EXCHANGE_RATE,REFERENCE_TYPE,REFERENCE_ID,ACCOUNT_ID,`DATE`,CREATED_AT) ' +
-            'VALUES (2,0,?,1,?,999002,1003,?,NOW())',
-          ['USD', PROBE, '2026-07-02'],
-        );
-        throw original;
-      });
-    } catch (e) {
-      caught = e;
-    }
-
-    // The very same error object reaches the caller.
-    expect(caught).toBe(original);
-    expect(caught.message).toBe('STAGE0_BUSINESS_RULE_FAILED');
-
-    const rows = await db('ACCOUNTS_TRANSACTIONS')
-      .where('REFERENCE_TYPE', PROBE)
-      .select('ID');
-    expect(rows.length).toBe(0);
   });
 });

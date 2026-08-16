@@ -37,14 +37,31 @@ export async function waitForTransaction(trx) {
 }
 
 /**
- * Run a callback when the transaction is done.
+ * Run a callback once the transaction has completed SUCCESSFULLY.
+ *
+ * The rejection arm below is load-bearing - do not delete it as dead code.
+ *
+ * It keys off `trx.executionPromise`, whose settlement is what distinguishes a
+ * committed transaction from a rolled-back one:
+ *
+ *   executionPromise RESOLVES -> the transaction committed -> callback may run
+ *   executionPromise REJECTS  -> rolled back / failed      -> callback MUST NOT run
+ *
+ * This only holds because `UnitOfWork` uses Knex's managed transaction form. A
+ * bare `trx.rollback()` (no argument) RESOLVES `executionPromise` on knex 3.1.0,
+ * which is indistinguishable from a successful commit - measured behaviour, and
+ * the reason post-transaction side effects previously fired even when the
+ * business transaction had been rolled back. Under the managed form the promise
+ * rejects on rollback, so this arm is what actually suppresses those side
+ * effects. See UnitOfWork.withTransaction.
+ *
  * @param {import('objection').TransactionOrKnex | undefined} trx
  * @param {Function} callback
  */
 export function runAfterTransaction(trx, callback) {
   waitForTransaction(trx).then(
     () => {
-      // If transaction success, then run action
+      // Transaction committed: run the after-transaction action.
       return Promise.resolve(callback()).catch((error) => {
         setTimeout(() => {
           throw error;
@@ -52,7 +69,7 @@ export function runAfterTransaction(trx, callback) {
       });
     },
     () => {
-      // Ignore transaction error
+      // Transaction rolled back or failed: the callback must NOT run.
     },
   );
 }
