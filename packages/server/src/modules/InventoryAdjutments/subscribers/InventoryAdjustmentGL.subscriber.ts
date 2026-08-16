@@ -18,8 +18,8 @@ export class InventoryAdjustmentsGLSubscriber {
    * Handles writing increment inventory adjustment GL entries.
    * @param {IInventoryAdjustmentEventCreatedPayload} payload -
    */
-  @OnEvent(events.inventoryAdjustment.onQuickCreated)
-  @OnEvent(events.inventoryAdjustment.onPublished)
+  @OnEvent(events.inventoryAdjustment.onQuickCreated, { suppressErrors: false })
+  @OnEvent(events.inventoryAdjustment.onPublished, { suppressErrors: false })
   async handleGLEntriesOnceIncrementAdjustmentCreated({
     inventoryAdjustmentId,
     inventoryAdjustment,
@@ -43,7 +43,7 @@ export class InventoryAdjustmentsGLSubscriber {
    * Reverts the inventory adjustment GL entries once the transaction deleted.
    * @param {IInventoryAdjustmentDeletingPayload} payload -
    */
-  @OnEvent(events.inventoryAdjustment.onDeleting)
+  @OnEvent(events.inventoryAdjustment.onDeleting, { suppressErrors: false })
   async revertAdjustmentGLEntriesOnceDeleted({
     inventoryAdjustment,
     trx,
@@ -63,7 +63,7 @@ export class InventoryAdjustmentsGLSubscriber {
    * @param {IInventoryAdjustmentEventPublishedPayload} payload
    * @param {IInventoryAdjustmentEventCreatedPayload} payload -
    */
-  @OnEvent(events.inventoryAdjustment.onPublished)
+  @OnEvent(events.inventoryAdjustment.onPublished, { suppressErrors: false })
   async handleWriteInventoryTransactionsOncePublished({
     inventoryAdjustmentId,
     trx,
