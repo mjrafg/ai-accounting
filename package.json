@@ -17,6 +17,7 @@
     "e2e:webapp": "playwright test",
     "start:debug": "lerna run start:debug",
     "prepare": "husky install",
+    "ai": "packages/server/node_modules/.bin/ts-node --transpile-only -P tools/autopilot/tsconfig.json tools/autopilot/cli.ts",
     "system:migrate:make": "lerna run cli:system:migrate:make --scope \"@bigcapital/server\"",
     "tenants:migrate:make": "lerna run cli:tenants:migrate:make --scope \"@bigcapital/server\"",
     "system:migrate:rollback": "lerna run cli:system:migrate:rollback --scope \"@bigcapital/server\"",
