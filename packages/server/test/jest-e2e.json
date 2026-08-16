@@ -3,6 +3,7 @@
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": "auth.e2e-spec.ts$",
+  "setupFiles": ["<rootDir>/jest-setup-emitwarning.js"],
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
