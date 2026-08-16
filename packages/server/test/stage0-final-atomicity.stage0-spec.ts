@@ -23,6 +23,9 @@ import { PaymentReceivedGLEntries } from '../src/modules/PaymentReceived/command
 import { LandedCostGLEntriesSubscriber } from '../src/modules/BillLandedCosts/commands/LandedCostGLEntries.subscriber';
 import { LandedCostInventoryTransactionsSubscriber } from '../src/modules/BillLandedCosts/commands/LandedCostInventoryTransactions.subscriber';
 import { LandedCostSyncCostTransactions } from '../src/modules/BillLandedCosts/commands/LandedCostSyncCostTransactions.service';
+import { CreditNoteInventoryTransactionsSubscriber } from '../src/modules/CreditNotes/subscribers/CreditNoteInventoryTransactionsSubscriber';
+import { CreditNoteInventoryTransactions } from '../src/modules/CreditNotes/commands/CreditNotesInventoryTransactions';
+import { VendorCreditInventoryTransactions } from '../src/modules/VendorCredit/commands/VendorCreditInventoryTransactions';
 import { events } from '../src/common/events/events';
 
 jest.setTimeout(300000);
@@ -166,17 +169,24 @@ describe('Stage 0 final: inventory propagation on credit note / vendor credit', 
     expect(rows.length).toBe(0);
   });
 
-  // LIMITATION (reported, not silently dropped): the credit-note EDIT path did
-  // not invoke the inventory write under this fixture - the request returned 200
-  // with the inventory leaf mocked to reject, via both
-  // CreditNoteInventoryTransactions.editInventoryTransactions and the
-  // InventoryTransactionsService leaf. The handler guards on
-  // `if (!creditNote.isOpen) return;`, so the edited payload appears not to be
-  // open in this flow. The onEdited annotation IS applied and the create-side
-  // equivalent (1a) proves the mechanism for this subscriber; what is missing is
-  // a fixture that actually reaches the edit-side inventory write. Diagnosing
-  // that means changing credit-note edit semantics, which is Stage 1 territory.
-  it.skip('1b. CREDIT NOTE EDIT: inventory rewrite failure preserves the original state', async () => {
+  // The credit-note onEdited inventory handler is annotated, but it can never
+  // do any work: it guards on `if (!creditNote.isOpen) return;`, and the object
+  // the edit command emits can never satisfy that guard.
+  //
+  //   isOpen = !!openedAt && creditsRemaining > 0
+  //   creditsRemaining = max(amount - refundedAmount - invoicesAmount, 0)
+  //
+  // CommandCreditNoteDTOTransform builds the model that upsertGraph returns:
+  //   * `openedAt` is added only when `!oldCreditNote?.openedAt`, so editing an
+  //     already-open note omits it entirely -> `!!undefined` -> isOpen false.
+  //   * `refundedAmount` / `invoicesAmount` are seeded only when `!oldCreditNote`
+  //     (upstream commit 76fc32078), so on any edit they are undefined ->
+  //     creditsRemaining is NaN -> `NaN > 0` is false -> isOpen false.
+  //
+  // Both edit branches were driven through the real API and observed; this test
+  // pins that observation so the dead guard cannot regress unnoticed. Fixing it
+  // changes credit-note edit semantics and is out of Stage 0 scope.
+  it('1b. CREDIT NOTE EDIT: inventory handler is invoked but always short-circuits', async () => {
     const created = await post('/credit-notes', {
       customerId,
       creditNoteDate: DATE,
@@ -194,18 +204,27 @@ describe('Stage 0 final: inventory propagation on credit note / vendor credit', 
     });
     expect(created.status).toBe(201);
     const id = created.body.id;
-    const beforeInv = await invTxns('CreditNote', id);
-    const beforeGL = await ledgerRows('CreditNote', id);
-    const beforeAmount = await db('CREDIT_NOTES')
-      .where('ID', id)
-      .select('AMOUNT');
 
-    // Fail at the leaf the rewrite funnels through (same target as the create
-    // case), which is reachable for spying as a plain singleton.
-    const inventory = app.get(InventoryTransactionsService);
+    const sub = app.get(CreditNoteInventoryTransactionsSubscriber);
+    const inner = app.get(CreditNoteInventoryTransactions);
+    let seen: any = null;
+    const orig = sub.rewriteInventoryTransactionsOnceEdited.bind(sub);
     jest
-      .spyOn(inventory, 'recordInventoryTransactions')
-      .mockRejectedValue(new Error('STAGE0_CN_INV_EDIT_FAILED'));
+      .spyOn(sub, 'rewriteInventoryTransactionsOnceEdited')
+      .mockImplementation(async (payload: any) => {
+        const cn = payload.creditNote;
+        seen = {
+          openedAt: cn?.openedAt ?? null,
+          isOpen: cn?.isOpen,
+          creditsRemainingIsNaN: Number.isNaN(cn?.creditsRemaining),
+        };
+        return orig(payload);
+      });
+    // Would reject if it were ever reached, so a passing edit also proves the
+    // rewrite never runs.
+    const innerSpy = jest
+      .spyOn(inner, 'editInventoryTransactions')
+      .mockRejectedValue(new Error('STAGE0_CN_INV_EDIT_UNREACHABLE'));
 
     const res = await put(`/credit-notes/${id}`, {
       customerId,
@@ -222,11 +241,68 @@ describe('Stage 0 final: inventory propagation on credit note / vendor credit', 
         },
       ],
     });
+
+    // The subscriber ran, saw a payload that cannot be open, and returned early.
+    expect(res.status).toBe(200);
+    expect(seen).not.toBeNull();
+    expect(seen.openedAt).toBeNull();
+    expect(seen.isOpen).toBe(false);
+    expect(innerSpy).not.toHaveBeenCalled();
+  });
+
+  it('1c. VENDOR CREDIT EDIT: inventory rewrite failure preserves the original state', async () => {
+    const created = await post('/vendor-credits', {
+      vendorId,
+      vendorCreditDate: DATE,
+      exchangeRate: 1,
+      open: true,
+      entries: [
+        {
+          index: 1,
+          itemId: invItem,
+          rate: 100,
+          quantity: 2,
+          costAccountId: 1019,
+        },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+
+    const beforeInv = await invTxns('VendorCredit', id);
+    const beforeGL = await ledgerRows('VendorCredit', id);
+    const beforeAmount = await db('VENDOR_CREDITS')
+      .where('ID', id)
+      .select('AMOUNT');
+    // Control: the create path really did write inventory, so the edit below is
+    // rewriting something rather than asserting over an empty set.
+    expect(beforeInv.length).toBeGreaterThan(0);
+
+    const inner = app.get(VendorCreditInventoryTransactions);
+    jest
+      .spyOn(inner, 'editInventoryTransactions')
+      .mockRejectedValue(new Error('STAGE0_VC_INV_EDIT_FAILED'));
+
+    const res = await put(`/vendor-credits/${id}`, {
+      vendorId,
+      vendorCreditDate: DATE,
+      exchangeRate: 1,
+      open: true,
+      entries: [
+        {
+          index: 1,
+          itemId: invItem,
+          rate: 999,
+          quantity: 7,
+          costAccountId: 1019,
+        },
+      ],
+    });
     expect(res.status).toBeGreaterThanOrEqual(400);
 
-    expect(await invTxns('CreditNote', id)).toEqual(beforeInv);
-    expect(await ledgerRows('CreditNote', id)).toEqual(beforeGL);
-    expect(await db('CREDIT_NOTES').where('ID', id).select('AMOUNT')).toEqual(
+    expect(await invTxns('VendorCredit', id)).toEqual(beforeInv);
+    expect(await ledgerRows('VendorCredit', id)).toEqual(beforeGL);
+    expect(await db('VENDOR_CREDITS').where('ID', id).select('AMOUNT')).toEqual(
       beforeAmount,
     );
   });
@@ -279,10 +355,16 @@ describe('Stage 0 final: strengthened reversal proof', () => {
       // fixture than this probe builds; neutralize them so the propagated error
       // is unambiguously the one raised by the handler under test.
       jest
-        .spyOn(app.get(LandedCostGLEntriesSubscriber), 'writeGLEntriesOnceLandedCostCreated')
+        .spyOn(
+          app.get(LandedCostGLEntriesSubscriber),
+          'writeGLEntriesOnceLandedCostCreated',
+        )
         .mockResolvedValue(undefined);
       jest
-        .spyOn(app.get(LandedCostInventoryTransactionsSubscriber), 'writeInventoryTransactionsOnceCreated')
+        .spyOn(
+          app.get(LandedCostInventoryTransactionsSubscriber),
+          'writeInventoryTransactionsOnceCreated',
+        )
         .mockResolvedValue(undefined);
 
       const sync = app.get(LandedCostSyncCostTransactions);
@@ -297,8 +379,13 @@ describe('Stage 0 final: strengthened reversal proof', () => {
         await uow.withTransaction(async (trx: Knex.Transaction) => {
           // A real write on the owning transaction, so the rollback is
           // observable in the database rather than only inferred.
-          await trx.raw('UPDATE `ACCOUNTS` SET `DESCRIPTION` = ? WHERE `ID` = 1000', [marker]);
-          const [before] = await trx.raw('SELECT `DESCRIPTION` d FROM `ACCOUNTS` WHERE `ID` = 1000');
+          await trx.raw(
+            'UPDATE `ACCOUNTS` SET `DESCRIPTION` = ? WHERE `ID` = 1000',
+            [marker],
+          );
+          const [before] = await trx.raw(
+            'SELECT `DESCRIPTION` d FROM `ACCOUNTS` WHERE `ID` = 1000',
+          );
           expect(before[0].d).toBe(marker);
 
           // Real event, real registered subscriber, real annotation.
@@ -318,10 +405,14 @@ describe('Stage 0 final: strengthened reversal proof', () => {
       }
 
       expect(caught).toBeDefined();
-      expect(String(caught.message)).toContain('STAGE0_LANDED_COST_SYNC_FAILED');
+      expect(String(caught.message)).toContain(
+        'STAGE0_LANDED_COST_SYNC_FAILED',
+      );
 
       // The owning transaction rolled back: the in-transaction write is gone.
-      const [after] = await db.raw('SELECT `DESCRIPTION` d FROM `ACCOUNTS` WHERE `ID` = 1000');
+      const [after] = await db.raw(
+        'SELECT `DESCRIPTION` d FROM `ACCOUNTS` WHERE `ID` = 1000',
+      );
       expect(after[0].d).not.toBe(marker);
     });
   });
