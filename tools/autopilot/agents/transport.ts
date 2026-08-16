@@ -1,0 +1,146 @@
+/**
+ * How an adapter actually reaches a model.
+ *
+ * Two transports exist:
+ *   exec    - spawn a real installed CLI (discovered, never assumed).
+ *   fixture - replay a recorded structured response from disk.
+ *
+ * The fixture transport is a test double for exercising the pipeline, not a
+ * provider. Everything it produces is stamped `simulated: true` all the way
+ * into the event log and the report, and it refuses to run unless
+ * AI_ALLOW_FIXTURES=1 is set explicitly.
+ */
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { AgentResult, AgentTask } from '../types';
+import { AI_ROOT, writeRawArtifact } from '../storage/event-store';
+import { extractUsage, parseStructured } from '../parsers/structured-output';
+
+export interface TransportSpec {
+  kind: 'exec' | 'fixture';
+  /** argv template for exec; {{PROMPT}} is replaced with the rendered prompt. */
+  argv?: string[];
+  /** Directory of recorded responses for fixture. */
+  fixtureDir?: string;
+  provider: string;
+}
+
+export function fixturesAllowed(): boolean {
+  return process.env.AI_ALLOW_FIXTURES === '1';
+}
+
+function requiredKeysFor(schemaName: string): string[] {
+  switch (schemaName) {
+    case 'design':
+      return ['scopeAllowlist', 'outOfScope', 'invariants', 'requiredTests'];
+    case 'design-review':
+      return ['verdict', 'findings'];
+    case 'adjudication':
+      return ['adjudications'];
+    case 'implementation':
+      return ['status', 'filesChanged'];
+    case 'review':
+      return ['findings'];
+    default:
+      return [];
+  }
+}
+
+export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
+  const argv = (spec.argv ?? []).map((a) => a.replace('{{PROMPT}}', task.prompt));
+  const started = Date.now();
+  const res = spawnSync(argv[0], argv.slice(1), {
+    cwd: task.cwd,
+    encoding: 'utf8',
+    timeout: task.timeoutMs,
+    maxBuffer: 256 * 1024 * 1024,
+    env: process.env,
+  });
+  const raw = (res.stdout ?? '') + (res.stderr ?? '');
+  const { rawArtifactPath, rawArtifactHash } = writeRawArtifact(
+    task.taskId,
+    `${spec.provider}-${task.role}-${started}.raw.txt`,
+    raw,
+  );
+  const parsed = parseStructured(raw, requiredKeysFor(task.schemaName));
+  return {
+    ok: res.status === 0 && parsed.ok,
+    structured: parsed.value,
+    rawArtifactPath,
+    rawArtifactHash,
+    durationMs: Date.now() - started,
+    exitCode: res.status,
+    usage: extractUsage(raw),
+    error: parsed.ok ? undefined : parsed.error,
+    simulated: false,
+    provider: spec.provider,
+  };
+}
+
+export function runFixture(spec: TransportSpec, task: AgentTask): AgentResult {
+  const started = Date.now();
+  if (!fixturesAllowed()) {
+    return {
+      ok: false,
+      structured: null,
+      rawArtifactPath: '',
+      rawArtifactHash: '',
+      durationMs: 0,
+      exitCode: null,
+      usage: null,
+      error: 'fixture transport requires AI_ALLOW_FIXTURES=1',
+      simulated: true,
+      provider: spec.provider,
+    };
+  }
+  const dir = spec.fixtureDir ?? path.join(AI_ROOT, 'fixtures', spec.provider);
+  const file = path.join(dir, `${task.taskId}.${task.role}.json`);
+  const fallback = path.join(dir, `default.${task.role}.json`);
+  const chosen = fs.existsSync(file) ? file : fallback;
+  if (!fs.existsSync(chosen)) {
+    return {
+      ok: false,
+      structured: null,
+      rawArtifactPath: '',
+      rawArtifactHash: '',
+      durationMs: Date.now() - started,
+      exitCode: null,
+      usage: null,
+      error: `no fixture for role ${task.role} at ${file} or ${fallback}`,
+      simulated: true,
+      provider: spec.provider,
+    };
+  }
+  const raw = fs.readFileSync(chosen, 'utf8');
+  const { rawArtifactPath, rawArtifactHash } = writeRawArtifact(
+    task.taskId,
+    `${spec.provider}-${task.role}-${started}.fixture.json`,
+    raw,
+  );
+  const parsed = parseStructured(raw, requiredKeysFor(task.schemaName));
+  return {
+    ok: parsed.ok,
+    structured: parsed.value,
+    rawArtifactPath,
+    rawArtifactHash,
+    durationMs: Date.now() - started,
+    exitCode: 0,
+    // Fixtures never claim token or cost data.
+    usage: null,
+    error: parsed.ok ? undefined : parsed.error,
+    simulated: true,
+    provider: spec.provider,
+  };
+}
+
+export function runTransport(spec: TransportSpec, task: AgentTask): AgentResult {
+  return spec.kind === 'fixture' ? runFixture(spec, task) : runExec(spec, task);
+}
+
+/** Resolves an executable without assuming it is on PATH. */
+export function which(bin: string): string | null {
+  const res = spawnSync('sh', ['-lc', `command -v ${bin}`], { encoding: 'utf8' });
+  const out = (res.stdout ?? '').trim();
+  return out.length ? out.split('\n')[0] : null;
+}
