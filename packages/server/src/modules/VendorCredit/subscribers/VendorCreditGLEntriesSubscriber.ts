@@ -17,7 +17,7 @@ export class VendorCreditGlEntriesSubscriber {
    * Writes GL entries of vendor credit once the transaction created.
    * @param {IVendorCreditCreatedPayload} payload -
    */
-  @OnEvent(events.vendorCredit.onCreated)
+  @OnEvent(events.vendorCredit.onCreated, { suppressErrors: false })
   public async writeGLEntriesOnceVendorCreditCreated({
     vendorCredit,
     trx,
@@ -35,7 +35,7 @@ export class VendorCreditGlEntriesSubscriber {
    * Writes Gl entries of vendor credit once the transaction opened.
    * @param {IVendorCreditOpenedPayload} payload -
    */
-  @OnEvent(events.vendorCredit.onOpened)
+  @OnEvent(events.vendorCredit.onOpened, { suppressErrors: false })
   public async writeGLEntgriesOnceVendorCreditOpened({
     vendorCreditId,
     trx,
@@ -50,7 +50,7 @@ export class VendorCreditGlEntriesSubscriber {
    * Edits associated GL entries once vendor credit edited.
    * @param {IVendorCreditEditedPayload} payload
    */
-  @OnEvent(events.vendorCredit.onEdited)
+  @OnEvent(events.vendorCredit.onEdited, { suppressErrors: false })
   public async editGLEntriesOnceVendorCreditEdited({
     vendorCredit,
     trx,

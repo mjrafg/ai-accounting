@@ -17,7 +17,7 @@ export class RefundCreditNoteGLEntriesSubscriber {
    * Writes refund credit note GL entries once the transaction created.
    * @param {IRefundCreditNoteCreatedPayload} payload -
    */
-  @OnEvent(events.creditNote.onRefundCreated)
+  @OnEvent(events.creditNote.onRefundCreated, { suppressErrors: false })
   async writeRefundCreditGLEntriesOnceCreated({
     trx,
     refundCreditNote,
@@ -33,7 +33,7 @@ export class RefundCreditNoteGLEntriesSubscriber {
    * Reverts refund credit note GL entries once the transaction deleted.
    * @param {IRefundCreditNoteDeletedPayload} payload -
    */
-  @OnEvent(events.creditNote.onRefundDeleted)
+  @OnEvent(events.creditNote.onRefundDeleted, { suppressErrors: false })
   async revertRefundCreditGLEntriesOnceDeleted({
     trx,
     refundCreditId,

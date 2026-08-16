@@ -13,7 +13,7 @@ export class SaleReceiptCostGLEntriesSubscriber {
   /**
    * Writes the receipts cost GL entries once the inventory cost lots are written.
    */
-  @OnEvent(events.inventory.onCostLotsGLEntriesWrite)
+  @OnEvent(events.inventory.onCostLotsGLEntriesWrite, { suppressErrors: false })
   async writeReceiptsCostEntriesOnCostLotsWritten({
     trx,
     startingDate,

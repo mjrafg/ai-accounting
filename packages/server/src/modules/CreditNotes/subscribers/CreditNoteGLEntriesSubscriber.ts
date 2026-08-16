@@ -17,7 +17,7 @@ export class CreditNoteGLEntriesSubscriber {
    * Writes the GL entries once the credit note transaction created or open.
    * @param {ICreditNoteCreatedPayload|ICreditNoteOpenedPayload} payload -
    */
-  @OnEvent(events.creditNote.onCreated)
+  @OnEvent(events.creditNote.onCreated, { suppressErrors: false })
   public async writeGlEntriesOnceCreditNoteCreated({
     creditNote,
     trx,
@@ -35,7 +35,7 @@ export class CreditNoteGLEntriesSubscriber {
    * Writes the GL entries once the vendor credit transaction opened.
    * @param {ICreditNoteOpenedPayload} payload
    */
-  @OnEvent(events.creditNote.onOpened)
+  @OnEvent(events.creditNote.onOpened, { suppressErrors: false })
   public async writeGLEntriesOnceCreditNoteOpened({
     creditNote,
     trx,

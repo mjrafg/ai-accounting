@@ -19,7 +19,7 @@ export class SaleInvoiceWriteInventoryTransactionsSubscriber {
    * Handles the writing inventory transactions once the invoice created.
    * @param {ISaleInvoiceCreatedPayload} payload
    */
-  @OnEvent(events.saleInvoice.onCreated)
+  @OnEvent(events.saleInvoice.onCreated, { suppressErrors: false })
   public async handleWritingInventoryTransactions({
     saleInvoice,
     trx,
@@ -38,7 +38,7 @@ export class SaleInvoiceWriteInventoryTransactionsSubscriber {
    * Rewriting the inventory transactions once the sale invoice be edited.
    * @param {ISaleInvoiceEditPayload} payload -
    */
-  @OnEvent(events.saleInvoice.onEdited)
+  @OnEvent(events.saleInvoice.onEdited, { suppressErrors: false })
   public async handleRewritingInventoryTransactions({
     saleInvoice,
     trx,
@@ -54,7 +54,7 @@ export class SaleInvoiceWriteInventoryTransactionsSubscriber {
    * Handles deleting the inventory transactions once the invoice deleted.
    * @param {ISaleInvoiceDeletedPayload} payload -
    */
-  @OnEvent(events.saleInvoice.onDeleted)
+  @OnEvent(events.saleInvoice.onDeleted, { suppressErrors: false })
   public async handleDeletingInventoryTransactions({
     saleInvoiceId,
     oldSaleInvoice,

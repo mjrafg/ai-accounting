@@ -17,7 +17,7 @@ export class LandedCostGLEntriesSubscriber {
    * Writes GL entries once landed cost transaction created.
    * @param {IAllocatedLandedCostCreatedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onCreated)
+  @OnEvent(events.billLandedCost.onCreated, { suppressErrors: false })
   async writeGLEntriesOnceLandedCostCreated({
     billLandedCost,
     trx,
@@ -32,7 +32,7 @@ export class LandedCostGLEntriesSubscriber {
    * Reverts GL entries associated to landed cost transaction once deleted.
    * @param {IAllocatedLandedCostDeletedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onDeleted)
+  @OnEvent(events.billLandedCost.onDeleted, { suppressErrors: false })
   async revertGLEntriesOnceLandedCostDeleted({
     oldBillLandedCost,
     trx,

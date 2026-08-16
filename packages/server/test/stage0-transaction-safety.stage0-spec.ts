@@ -174,6 +174,82 @@ describe('Stage 0: ledger storage failure propagation', () => {
   });
 });
 
+describe('Stage 0: representative edit and reversal paths fail closed', () => {
+  /**
+   * Tranche 1 covered create/publish. These cover the two remaining shapes -
+   * GL rewrite on edit, and GL reversal on delete - on the manual journal path,
+   * which is the write path currently proven reachable by a passing Stage -1
+   * spec. Paths whose own create step already fails for pre-existing business
+   * reasons are deliberately not "fixed" here to make them testable.
+   */
+  async function publishedJournal(tag: string) {
+    const id = await createDraftJournal(tag);
+    const res = await patch(`/manual-journals/${id}/publish`);
+    expect(res.status).toBe(200);
+    const state = await ledgerState(id);
+    expect(state.entryCount).toBe(2);
+    return id;
+  }
+
+  it('EDIT: GL rewrite failure -> non-success, existing ledger rows preserved', async () => {
+    const journalId = await publishedJournal('edit');
+    const before = await ledgerState(journalId);
+
+    const entries = app.get(LedgerEntriesStorageService);
+    jest
+      .spyOn(entries, 'saveEntries')
+      .mockRejectedValue(new Error('STAGE0_INJECTED_EDIT_FAILURE'));
+
+    const res = await request(app.getHttpServer())
+      .put(`/manual-journals/${journalId}`)
+      .set('organization-id', organizationId)
+      .set('Authorization', authHeader)
+      .send({
+        date: '2027-06-01',
+        reference: `STAGE0-edit-${Date.now()}`,
+        journalNumber: `STAGE0-edit-${Date.now()}`,
+        publish: true,
+        entries: [
+          { index: 1, credit: 900, debit: 0, accountId: 1003 },
+          { index: 2, credit: 0, debit: 900, accountId: 1004 },
+        ],
+      });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    // The edit reverts then rewrites GL inside one transaction; a failure must
+    // leave the ORIGINAL rows intact rather than deleting them.
+    const after = await ledgerState(journalId);
+    expect(after.entryCount).toBe(before.entryCount);
+    expect(after.balances).toEqual(before.balances);
+  });
+
+  it('DELETE/REVERSAL: GL reversal failure -> non-success, journal and ledger preserved', async () => {
+    const journalId = await publishedJournal('revert');
+    const before = await ledgerState(journalId);
+
+    const entries = app.get(LedgerEntriesStorageService);
+    jest
+      .spyOn(entries, 'deleteEntries')
+      .mockRejectedValue(new Error('STAGE0_INJECTED_REVERSAL_FAILURE'));
+
+    const res = await request(app.getHttpServer())
+      .delete(`/manual-journals/${journalId}`)
+      .set('organization-id', organizationId)
+      .set('Authorization', authHeader)
+      .send();
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    const after = await ledgerState(journalId);
+    expect(after.entryCount).toBe(before.entryCount);
+    expect(after.balances).toEqual(before.balances);
+
+    const journal = await db('MANUAL_JOURNALS')
+      .where('ID', journalId)
+      .select('ID');
+    expect(journal.length).toBe(1);
+  });
+});
+
 describe('Stage 0: inventory adjustment GL failure propagation', () => {
   let itemId: number;
 

@@ -17,7 +17,7 @@ export class LandedCostInventoryTransactionsSubscriber {
    * Writes inventory transactions of the landed cost transaction once created.
    * @param {IAllocatedLandedCostCreatedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onCreated)
+  @OnEvent(events.billLandedCost.onCreated, { suppressErrors: false })
   async writeInventoryTransactionsOnceCreated({
     billLandedCost,
     trx,
@@ -35,7 +35,7 @@ export class LandedCostInventoryTransactionsSubscriber {
    * Reverts inventory transactions of the landed cost transaction once deleted.
    * @param {IAllocatedLandedCostDeletedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onDeleted)
+  @OnEvent(events.billLandedCost.onDeleted, { suppressErrors: false })
   async revertInventoryTransactionsOnceDeleted({
     oldBillLandedCost,
     trx,

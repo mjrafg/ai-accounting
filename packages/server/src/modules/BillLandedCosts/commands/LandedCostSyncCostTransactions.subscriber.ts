@@ -36,7 +36,7 @@ export class LandedCostSyncCostTransactionsSubscriber {
    * Decrement cost transactions once the allocated landed cost reverted.
    * @param {IAllocatedLandedCostDeletedPayload} payload -
    */
-  @OnEvent(events.billLandedCost.onDeleted)
+  @OnEvent(events.billLandedCost.onDeleted, { suppressErrors: false })
   async decrementCostTransactionsOnceDeleted({
     oldBillLandedCost,
     trx,

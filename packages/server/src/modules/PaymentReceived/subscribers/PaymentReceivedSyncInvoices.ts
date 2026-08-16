@@ -21,7 +21,7 @@ export class PaymentReceivedSyncInvoicesSubscriber {
    * Handle sale invoice increment/decrement payment amount
    * once created, edited or deleted.
    */
-  @OnEvent(events.paymentReceive.onCreated)
+  @OnEvent(events.paymentReceive.onCreated, { suppressErrors: false })
   private async handleInvoiceIncrementPaymentOnceCreated({
     paymentReceive,
     trx,
@@ -36,7 +36,7 @@ export class PaymentReceivedSyncInvoicesSubscriber {
   /**
    * Handle sale invoice increment/decrement payment amount once edited.
    */
-  @OnEvent(events.paymentReceive.onEdited)
+  @OnEvent(events.paymentReceive.onEdited, { suppressErrors: false })
   private async handleInvoiceIncrementPaymentOnceEdited({
     paymentReceive,
     oldPaymentReceive,
@@ -52,7 +52,7 @@ export class PaymentReceivedSyncInvoicesSubscriber {
   /**
    * Handle revert invoices payment amount once payment receive deleted.
    */
-  @OnEvent(events.paymentReceive.onDeleted)
+  @OnEvent(events.paymentReceive.onDeleted, { suppressErrors: false })
   private async handleInvoiceDecrementPaymentAmount({
     paymentReceiveId,
     oldPaymentReceive,

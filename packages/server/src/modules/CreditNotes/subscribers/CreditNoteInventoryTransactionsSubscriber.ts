@@ -20,7 +20,7 @@ export class CreditNoteInventoryTransactionsSubscriber {
    * @returns {Promise<void>}
    */
   @OnEvent(events.creditNote.onCreated)
-  @OnEvent(events.creditNote.onOpened)
+  @OnEvent(events.creditNote.onOpened, { suppressErrors: false })
   public async writeInventoryTranscationsOnceCreated({
     creditNote,
     trx,
@@ -58,7 +58,7 @@ export class CreditNoteInventoryTransactionsSubscriber {
    * Reverts inventory transactions once credit note deleted.
    * @param {ICreditNoteDeletedPayload} payload -
    */
-  @OnEvent(events.creditNote.onDeleted)
+  @OnEvent(events.creditNote.onDeleted, { suppressErrors: false })
   public async revertInventoryTransactionsOnceDeleted({
     oldCreditNote,
     trx,
