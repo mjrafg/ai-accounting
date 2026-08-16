@@ -46,6 +46,7 @@ export class PaymentReceivedGLEntries {
     const ledger = await this.getPaymentReceiveGLedger(
       paymentReceive,
       tenantMeta.baseCurrency,
+      trx,
     );
     // Commit the ledger entries to the storage.
     await this.ledgerStorage.commit(ledger, trx);
@@ -93,11 +94,19 @@ export class PaymentReceivedGLEntries {
   public getPaymentReceiveGLedger = async (
     paymentReceive: PaymentReceived,
     baseCurrencyCode: string,
+    trx?: Knex.Transaction,
   ): Promise<Ledger> => {
     // Retrieve the A/R account of the given currency.
+    //
+    // findOrCreateAccountReceivable INSERTS the account when a receivable for
+    // this currency does not exist yet. Without `trx` that insert runs on a
+    // pooled connection and commits independently of the payment, so a payment
+    // that later rolls back would leave an orphan A/R account behind.
     const receivableAccount =
       await this.accountRepository.findOrCreateAccountReceivable(
         paymentReceive.currencyCode,
+        {},
+        trx,
       );
     // Exchange gain/loss account.
     const exGainLossAccount = (await this.accountRepository.findBySlug(
