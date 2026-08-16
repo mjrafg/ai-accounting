@@ -20,7 +20,7 @@ export class BillGLEntriesSubscriber {
    * Handles writing journal entries once bill created.
    * @param {IBillCreatedPayload} payload -
    */
-  @OnEvent(events.bill.onCreated)
+  @OnEvent(events.bill.onCreated, { suppressErrors: false })
   @OnEvent(events.bill.onOpened, { suppressErrors: false })
   public async handlerWriteJournalEntriesOnCreate({
     bill,

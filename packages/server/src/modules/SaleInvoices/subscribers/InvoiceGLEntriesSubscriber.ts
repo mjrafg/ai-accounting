@@ -17,7 +17,7 @@ export class InvoiceGLEntriesSubscriber {
    * @param {ISaleInvoiceCreatedPayload} payload -
    * @returns {Promise<void>}
    */
-  @OnEvent(events.saleInvoice.onCreated)
+  @OnEvent(events.saleInvoice.onCreated, { suppressErrors: false })
   @OnEvent(events.saleInvoice.onDelivered, { suppressErrors: false })
   public async handleWriteJournalEntriesOnInvoiceCreated({
     saleInvoiceId,

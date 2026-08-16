@@ -16,7 +16,7 @@ export class SaleReceiptGLEntriesSubscriber {
    * Handles writing sale receipt income journal entries once created.
    * @param {ISaleReceiptCreatedPayload} payload -
    */
-  @OnEvent(events.saleReceipt.onCreated)
+  @OnEvent(events.saleReceipt.onCreated, { suppressErrors: false })
   @OnEvent(events.saleReceipt.onClosed, { suppressErrors: false })
   public async handleWriteReceiptIncomeJournalEntrieOnCreate({
     saleReceiptId,

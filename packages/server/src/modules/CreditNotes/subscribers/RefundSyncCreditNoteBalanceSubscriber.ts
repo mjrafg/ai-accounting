@@ -17,7 +17,7 @@ export class RefundSyncCreditNoteBalanceSubscriber {
    * Increment credit note refunded amount once associated refund transaction created.
    * @param {IRefundCreditNoteCreatedPayload} payload -
    */
-  @OnEvent(events.creditNote.onRefundCreated)
+  @OnEvent(events.creditNote.onRefundCreated, { suppressErrors: false })
   async incrementRefundedAmountOnceRefundCreated({
     trx,
     refundCreditNote,
@@ -33,7 +33,7 @@ export class RefundSyncCreditNoteBalanceSubscriber {
    * Decrement credit note refunded amount once associated refuned transaction deleted.
    * @param {IRefundCreditNoteDeletedPayload} payload -
    */
-  @OnEvent(events.creditNote.onRefundDeleted)
+  @OnEvent(events.creditNote.onRefundDeleted, { suppressErrors: false })
   async decrementRefundedAmountOnceRefundDeleted({
     trx,
     oldRefundCredit,

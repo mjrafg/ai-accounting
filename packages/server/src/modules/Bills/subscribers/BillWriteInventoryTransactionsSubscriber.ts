@@ -17,7 +17,7 @@ export class BillWriteInventoryTransactionsSubscriber {
    * Handles writing the inventory transactions once bill created.
    * @param {IBillCreatedPayload | IBillOpenedPayload} payload -
    */
-  @OnEvent(events.bill.onCreated)
+  @OnEvent(events.bill.onCreated, { suppressErrors: false })
   @OnEvent(events.bill.onOpened, { suppressErrors: false })
   public async handleWritingInventoryTransactions({
     bill,

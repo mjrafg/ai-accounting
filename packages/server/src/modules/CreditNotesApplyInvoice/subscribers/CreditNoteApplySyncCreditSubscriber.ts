@@ -18,7 +18,9 @@ export class CreditNoteApplySyncCreditSubscriber {
    * Increment credited amount of credit note transaction once the transaction created.
    * @param {IApplyCreditToInvoicesCreatedPayload} payload -
    */
-  @OnEvent(events.creditNote.onApplyToInvoicesCreated)
+  @OnEvent(events.creditNote.onApplyToInvoicesCreated, {
+    suppressErrors: false,
+  })
   async incrementCreditedAmountOnceApplyToInvoicesCreated({
     trx,
     creditNote,
@@ -37,7 +39,9 @@ export class CreditNoteApplySyncCreditSubscriber {
    * Decrement credited amount of credit note transaction once the transaction deleted.
    * @param {IApplyCreditToInvoicesDeletedPayload} payload -
    */
-  @OnEvent(events.creditNote.onApplyToInvoicesDeleted)
+  @OnEvent(events.creditNote.onApplyToInvoicesDeleted, {
+    suppressErrors: false,
+  })
   async decrementCreditedAmountOnceApplyToInvoicesDeleted({
     creditNote,
     creditNoteAppliedToInvoice,

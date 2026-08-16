@@ -18,7 +18,7 @@ export class WriteInvoiceTaxTransactionsSubscriber {
    * Writes the invoice tax transactions on invoice created.
    * @param {ISaleInvoiceCreatingPaylaod}
    */
-  @OnEvent(events.saleInvoice.onCreated)
+  @OnEvent(events.saleInvoice.onCreated, { suppressErrors: false })
   async writeInvoiceTaxTransactionsOnCreated({
     saleInvoice,
     trx,
@@ -33,7 +33,7 @@ export class WriteInvoiceTaxTransactionsSubscriber {
    * Rewrites the invoice tax transactions on invoice edited.
    * @param {ISaleInvoiceEditedPayload} payload -
    */
-  @OnEvent(events.saleInvoice.onEdited)
+  @OnEvent(events.saleInvoice.onEdited, { suppressErrors: false })
   async rewriteInvoiceTaxTransactionsOnEdited({
     saleInvoice,
     trx,
@@ -50,7 +50,7 @@ export class WriteInvoiceTaxTransactionsSubscriber {
    * Removes the invoice tax transactions on invoice deleted.
    * @param {ISaleInvoiceEditingPayload}
    */
-  @OnEvent(events.saleInvoice.onDelete)
+  @OnEvent(events.saleInvoice.onDelete, { suppressErrors: false })
   async removeInvoiceTaxTransactionsOnDeleted({
     oldSaleInvoice,
     trx,
