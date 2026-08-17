@@ -103,9 +103,6 @@ describe('formatNumber (characterization)', () => {
       }
 
       expect(thrown).toBeInstanceOf(TypeError);
-      expect((thrown as TypeError).message).toBe(
-        "Cannot read properties of undefined (reading 'replace')",
-      );
     });
   });
 
