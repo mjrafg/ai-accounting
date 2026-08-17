@@ -260,8 +260,11 @@ export class Orchestrator {
   authorizeRetry(taskId: string, owner: string, reason: string, freshDesign = false): TaskRecord | null {
     const rec = this.d.tasks.deriveTask(taskId);
     if (!rec) return null;
-    if (rec.state !== 'ESCALATED') {
-      throw new Error(`task ${taskId} is ${rec.state}, not ESCALATED; nothing to retry`);
+    // ESCALATED is the usual case. DESIGNING is also accepted: a run that died
+    // mid-design leaves the task there, and requiring an artificial escalation
+    // first would add a fake event to the log purely to satisfy a check.
+    if (rec.state !== 'ESCALATED' && rec.state !== 'DESIGNING') {
+      throw new Error(`task ${taskId} is ${rec.state}; retry applies to ESCALATED or DESIGNING`);
     }
     const priorEscalations = this.d.tasks
       .byType(taskId, 'ESCALATION')
@@ -273,7 +276,7 @@ export class Orchestrator {
       payload: {
         authorizedBy: owner,
         reason,
-        retryingFrom: 'ESCALATED',
+        retryingFrom: rec.state,
         reenteringAt: 'DESIGNING',
         // When the recorded design is internally inconsistent, re-reviewing it
         // is pointless — it has to be produced again, once, with the prior
@@ -282,7 +285,7 @@ export class Orchestrator {
         priorEscalations,
       },
     });
-    this.transition(taskId, 'ESCALATED', 'DESIGNING');
+    if (rec.state === 'ESCALATED') this.transition(taskId, 'ESCALATED', 'DESIGNING');
     const updated = this.d.tasks.deriveTask(taskId)!;
     this.d.tasks.writeCache(updated);
     return updated;

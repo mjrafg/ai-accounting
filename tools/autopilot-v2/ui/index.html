@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Control Center V2</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--ink:#e6edf3;--muted:#8b949e;--line:#30363d;
+ --accent:#4f8ff7;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--pend:#6e7681;--radius:12px}
+@media (prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--ink:#1f2328;--muted:#59636e;--line:#d1d9e0;
+ --accent:#0969da;--ok:#1a7f37;--warn:#9a6700;--bad:#d1242f;--pend:#818b98}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line)}
+.hrow{display:flex;align-items:center;gap:10px;padding:10px 14px;max-width:1200px;margin:0 auto;flex-wrap:wrap}
+.brand{font-weight:700}.v2{font-size:11px;font-weight:700;color:var(--accent);border:1px solid var(--accent);
+ border-radius:999px;padding:1px 8px}
+nav{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--muted);font:inherit;font-size:13.5px;padding:6px 10px;border-radius:8px;cursor:pointer}
+nav button[aria-current="true"]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
+main{max-width:1200px;margin:0 auto;padding:16px 14px 60px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+h1{font-size:18px;margin:0 0 6px}h2{font-size:14px;margin:0 0 10px}h3{font-size:12px;margin:12px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+p.sub{color:var(--muted);margin:0 0 12px;font-size:13.5px}
+textarea,input,select{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px}
+textarea{min-height:88px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:9px 15px;font:inherit;font-weight:600;cursor:pointer}
+.btn.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.danger{background:var(--bad)}
+.btn:disabled{opacity:.5;cursor:default}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;border:0;padding:8px 13px;font:inherit;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff;font-weight:600}
+.pill{font-size:10.5px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.s-run{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.s-ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.s-warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.s-bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.s-idle{background:color-mix(in srgb,var(--pend) 20%,transparent);color:var(--muted)}
+.tile{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;border-top:1px solid var(--line);cursor:pointer}
+.tile:first-of-type{border-top:0}.tile .t{font-weight:600;font-size:14px}.tile .m{color:var(--muted);font-size:12.5px}
+.kv{display:grid;grid-template-columns:minmax(110px,auto) 1fr;gap:5px 12px;font-size:13.5px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;word-break:break-word}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-top:1px solid var(--line)}th{color:var(--muted)}
+.scroll{overflow-x:auto}
+.note{font-size:13px;color:var(--muted);background:color-mix(in srgb,var(--warn) 9%,transparent);
+ border:1px solid color-mix(in srgb,var(--warn) 28%,transparent);padding:9px 11px;border-radius:9px;margin:8px 0}
+.empty{color:var(--muted);text-align:center;padding:24px;font-size:13.5px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;padding:8px 12px;cursor:pointer;white-space:nowrap}
+.tabs button[aria-current="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.agents{display:grid;gap:10px}
+.apane{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ahead{display:flex;align-items:center;gap:8px;padding:8px 12px;background:color-mix(in srgb,var(--line) 40%,transparent);font-weight:700;font-size:12.5px;letter-spacing:.05em}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--pend)}
+.live-dot.on{background:var(--ok);animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.alog{max-height:420px;overflow-y:auto;padding:8px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.alog .t{color:var(--muted)}
+.alog .k-thinking{color:var(--muted);font-style:italic}
+.alog .k-tool{color:var(--accent)}
+.alog .k-error{color:var(--bad)}
+.alog .k-lifecycle{color:var(--warn)}
+.newmsg{position:sticky;bottom:0;text-align:center}
+.newmsg button{background:var(--accent);color:#fff;border:0;border-radius:999px;padding:4px 14px;font-size:12px;cursor:pointer}
+.finding{border:1px solid var(--line);border-radius:10px;padding:11px;margin-bottom:8px}
+.decision{border:1px solid var(--warn);border-radius:10px;padding:12px;margin:10px 0}
+.err{color:var(--bad);font-size:13px;min-height:18px}
+.center{max-width:380px;margin:10vh auto}
+pre.diff{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px;max-height:560px;overflow-y:auto}
+@media(max-width:560px){.kv{grid-template-columns:1fr}main{padding:12px 10px 54px}}
+</style>
+</head>
+<body>
+<header><div class="hrow">
+  <span class="brand">AI Control Center</span><span class="v2">V2</span>
+  <nav id="nav"></nav>
+</div></header>
+<main id="main"><div class="empty">Loading…</div></main>
+
+<script>
+"use strict";
+// Agent output is untrusted. Nothing is ever rendered as HTML: every value
+// goes through textContent. No innerHTML anywhere in this file.
+const $ = (t, attrs = {}, kids = []) => {
+  const el = document.createElement(t);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = String(v);
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, String(v));
+  }
+  for (const k of [].concat(kids)) if (k) el.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
+  return el;
+};
+const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null,
+  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false} };
+
+async function api(path, opts = {}) {
+  const o = { headers: { "content-type": "application/json" }, ...opts };
+  if (opts.body && state.csrf) o.headers["x-csrf-token"] = state.csrf;
+  const r = await fetch(path, o);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("request failed: " + r.status));
+  return j;
+}
+const short = s => (s ? String(s).slice(0, 9) : "");
+const fmt = t => { try { return new Date(t).toLocaleString(); } catch { return String(t); } };
+const hhmmss = t => { try { return new Date(t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"}); } catch { return ""; } };
+const dur = ms => ms > 3600e3 ? (ms/3600e3).toFixed(1)+"h" : ms > 60e3 ? Math.round(ms/60e3)+"m" : Math.round(ms/1e3)+"s";
+const SC = s => ["DEPLOYED","MERGED","READY_TO_MERGE","READY_TO_DEPLOY"].includes(s) ? "s-ok"
+  : ["ESCALATED","FAILED"].includes(s) ? "s-bad"
+  : ["AWAITING_HUMAN","PAUSED_RATE_LIMIT","PAUSED"].includes(s) ? "s-warn"
+  : ["CANCELLED","NEW"].includes(s) ? "s-idle" : "s-run";
+
+// ---- HOME -----------------------------------------------------------------
+function viewHome() {
+  const m = $("div");
+  const c = $("div", { class: "card" });
+  c.appendChild($("h1", { text: "What do you want the AI team to do?" }));
+  c.appendChild($("p", { class: "sub", text: "Describe it and leave. The system designs, reviews, implements, tests, gathers evidence, and merges/deploys when policy allows. You are asked only for genuinely critical decisions." }));
+  const ta = $("textarea", { placeholder: "e.g. Fix invoice tax calculation rounding for multi-currency invoices." });
+  c.appendChild(ta);
+  let risk = "medium";
+  const seg = $("div", { class: "seg", style: "margin-top:10px" });
+  ["low","medium","high"].forEach(r => {
+    const b = $("button", { type:"button", text:r.toUpperCase(), "aria-pressed":String(r===risk) });
+    b.onclick = () => { risk = r; [...seg.children].forEach(x => x.setAttribute("aria-pressed", String(x===b))); };
+    seg.appendChild(b);
+  });
+  const err = $("div", { class: "err" });
+  const go = $("button", { class: "btn", text: "Start" });
+  go.onclick = async () => {
+    err.textContent = "";
+    if (!ta.value.trim()) { err.textContent = "Describe the task first."; return; }
+    go.disabled = true;
+    try {
+      const r = await api("/api/v2/tasks", { method: "POST", body: JSON.stringify({ description: ta.value.trim(), risk }) });
+      ta.value = ""; await refresh(); goTask(r.taskId);
+    } catch (e) { err.textContent = e.message; }
+    go.disabled = false;
+  };
+  c.appendChild($("div", { class: "row", style: "margin-top:10px" }, [seg, go]));
+  c.appendChild(err);
+  m.appendChild(c);
+
+  if (!state.mfa.enrolled) m.appendChild($("div", { class: "note", text: "MFA NOT CONFIGURED — enroll on the System page to require a TOTP code for merge/deploy approvals." }));
+
+  const groups = [
+    ["Running", t => ["DESIGN","IMPLEMENT","VERIFY","REVIEW","FIX","FINAL_ACCEPTANCE","NEW"].includes(t.state)],
+    ["Awaiting Human", t => t.state === "AWAITING_HUMAN"],
+    ["Ready to Merge", t => t.state === "READY_TO_MERGE"],
+    ["Ready to Deploy", t => t.state === "READY_TO_DEPLOY"],
+    ["Paused", t => t.state === "PAUSED_RATE_LIMIT" || t.state === "PAUSED"],
+    ["Recently Completed", t => ["DEPLOYED","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state)],
+  ];
+  for (const [label, pred] of groups) {
+    const items = state.tasks.filter(pred);
+    if (!items.length) continue;
+    const g = $("div", { class: "card" }, [$("h2", { text: label })]);
+    items.slice(0, 8).forEach(t => g.appendChild(tile(t)));
+    m.appendChild(g);
+  }
+  if (state.legacy.length) {
+    const g = $("div", { class: "card" }, [$("h2", { text: "V1 Legacy (read-only)" })]);
+    state.legacy.slice(0, 6).forEach(t => g.appendChild($("div", { class: "tile" }, [
+      $("div", {}, [$("div", { class:"t", text: t.taskId + " · " + t.title }),
+        $("div", { class:"m", text: "V1 LEGACY · " + t.events + " events" })]),
+      $("span", { class: "pill s-idle", text: t.state }),
+    ])));
+    m.appendChild(g);
+  }
+  return m;
+}
+function tile(t) {
+  return $("div", { class: "tile", onclick: () => goTask(t.taskId) }, [
+    $("div", {}, [
+      $("div", { class: "t", text: t.taskId + " · " + t.title }),
+      $("div", { class: "m", text: `${t.risk} · ${t.phase || t.state} ${t.subPhase ? "/ "+t.subPhase : ""} · ${dur(t.elapsedMs)}` }),
+    ]),
+    $("span", { class: "pill " + SC(t.state), text: t.state.replace(/_/g," ") }),
+  ]);
+}
+
+// ---- TASK -----------------------------------------------------------------
+function goTask(id) { state.view = "task"; state.taskId = id; state.tab = "live"; render(); loadTask(id); openStream(id); }
+
+async function loadTask(id) {
+  try { state.detail = await api("/api/v2/tasks/" + id); render(); } catch { /* transient */ }
+}
+
+function openStream(id) {
+  if (state.es) { state.es.close(); state.es = null; }
+  state.lastId = 0;
+  const es = new EventSource(`/api/v2/tasks/${id}/stream`);
+  state.es = es;
+  es.addEventListener("chunk", (e) => {
+    const c = JSON.parse(e.data);
+    state.lastId = c.id;
+    appendChunk(c);
+  });
+  es.onerror = () => { /* EventSource reconnects with Last-Event-ID automatically */ };
+}
+
+const paneBufs = {};   // agent -> array of chunks (bounded)
+function appendChunk(c) {
+  const key = c.agent;
+  (paneBufs[key] = paneBufs[key] || []).push(c);
+  if (paneBufs[key].length > 3000) paneBufs[key].splice(0, 500);
+  const pane = document.getElementById("alog-" + key);
+  if (pane && (state.filter === "all" || state.filter === key) && matchesSearch(c)) {
+    pane.appendChild(chunkLine(c));
+    maybeScroll(pane);
+  }
+  const dot = document.getElementById("dot-" + key);
+  if (dot) { dot.classList.add("on"); clearTimeout(dot._t); dot._t = setTimeout(() => dot.classList.remove("on"), 5000); }
+  if (c.kind === "lifecycle" && /state:/.test(c.text)) loadTask(state.taskId);
+}
+function matchesSearch(c) { return !state.search || c.text.toLowerCase().includes(state.search.toLowerCase()); }
+function chunkLine(c) {
+  return $("div", { class: "k-" + c.kind }, [
+    $("span", { class: "t", text: hhmmss(c.ts) + " " }), c.text,
+  ]);
+}
+function maybeScroll(pane) {
+  if (state.autoscroll) pane.scrollTop = pane.scrollHeight;
+  else {
+    const btn = pane.parentElement.querySelector(".newmsg");
+    if (btn) btn.style.display = "block";
+  }
+}
+
+function viewTask() {
+  const t = state.detail;
+  const m = $("div");
+  if (!t) { m.appendChild($("div", { class: "card empty", text: "Loading…" })); return m; }
+
+  const head = $("div", { class: "card" });
+  head.appendChild($("div", { class: "row" }, [
+    $("h1", { text: t.taskId, style: "margin:0" }),
+    $("span", { class: "pill " + SC(t.state), text: t.state.replace(/_/g," ") }),
+    $("span", { class: "pill s-idle", text: t.risk.toUpperCase() }),
+    $("span", { class: "m", style:"color:var(--muted);font-size:12.5px", text: (t.phase||"") + (t.subPhase ? " / "+t.subPhase : "") + " · " + dur(t.elapsedMs) }),
+  ]));
+  head.appendChild($("div", { style:"white-space:pre-wrap;margin-top:8px;font-size:13.5px;color:var(--muted)", text: t.description }));
+  const acts = $("div", { class: "row", style: "margin-top:10px" });
+  if (!["DEPLOYED","CANCELLED","FAILED"].includes(t.state)) {
+    const cancel = $("button", { class: "btn danger", text: "Cancel" });
+    cancel.onclick = async () => { if (confirm("Cancel this task?")) { await api(`/api/v2/tasks/${t.taskId}/cancel`, { method:"POST", body:"{}" }); loadTask(t.taskId); } };
+    acts.appendChild(cancel);
+  }
+  if (["ESCALATED","PAUSED_RATE_LIMIT","PAUSED"].includes(t.state)) {
+    const res = $("button", { class: "btn sec", text: "Resume" });
+    res.onclick = async () => { await api(`/api/v2/tasks/${t.taskId}/resume`, { method:"POST", body:"{}" }); loadTask(t.taskId); };
+    acts.appendChild(res);
+  }
+  head.appendChild(acts);
+  m.appendChild(head);
+
+  if (t.awaitingHuman) m.appendChild(decisionCard(t));
+  if (t.state === "READY_TO_MERGE") m.appendChild(approveCard(t, "merge"));
+  if (t.state === "READY_TO_DEPLOY") m.appendChild(approveCard(t, "deploy"));
+
+  const tabs = $("div", { class: "tabs" });
+  for (const tab of ["overview","live","design","findings","tests","evidence","diff","report"]) {
+    const b = $("button", { text: tab[0].toUpperCase()+tab.slice(1), "aria-current": String(state.tab === tab) });
+    b.onclick = () => { state.tab = tab; render(); if (tab === "diff") loadDiff(); };
+    tabs.appendChild(b);
+  }
+  m.appendChild(tabs);
+
+  m.appendChild(
+    state.tab === "live" ? tabLive(t) :
+    state.tab === "design" ? tabDesign(t) :
+    state.tab === "findings" ? tabFindings(t) :
+    state.tab === "tests" ? tabTests(t) :
+    state.tab === "evidence" ? tabEvidence(t) :
+    state.tab === "diff" ? tabDiff(t) :
+    state.tab === "report" ? tabReport(t) : tabOverview(t));
+  return m;
+}
+
+function tabOverview(t) {
+  const c = $("div", { class: "card" });
+  c.appendChild($("dl", { class: "kv" }, [
+    $("dt",{text:"State"}), $("dd",{text:t.state + (t.subPhase?` (${t.subPhase})`:"")}),
+    $("dt",{text:"Risk"}), $("dd",{text:t.risk}),
+    $("dt",{text:"Branch"}), $("dd",{class:"mono",text:t.branch}),
+    $("dt",{text:"TASK_BASE_SHA"}), $("dd",{class:"mono",text:t.baseSha}),
+    $("dt",{text:"Current HEAD"}), $("dd",{class:"mono",text:t.headSha}),
+    $("dt",{text:"Worktree"}), $("dd",{class:"mono",text:t.worktree}),
+    $("dt",{text:"Created"}), $("dd",{text:fmt(t.createdAt)}),
+    $("dt",{text:"Elapsed"}), $("dd",{text:dur(t.elapsedMs)}),
+  ]));
+  const agents = $("div", { class:"card" }, [$("h2",{text:"Agent invocations"})]);
+  const tb = $("table");
+  tb.appendChild($("tr",{},[["When","Agent","Phase","Result","Duration","First chunk"].map(h=>$("th",{text:h}))].flat()));
+  (t.agents||[]).forEach(a => tb.appendChild($("tr",{},[
+    $("td",{text:hhmmss(a.ts)}), $("td",{text:a.agent}), $("td",{text:a.phase||""}),
+    $("td",{},[$("span",{class:"pill "+(a.type==="AGENT_FINISHED"?"s-ok":a.type==="AGENT_FAILED"?"s-bad":"s-run"),
+      text:a.type.replace("AGENT_","")+(a.failureKind?" "+a.failureKind:"")})]),
+    $("td",{text:a.durationMs?dur(a.durationMs):""}),
+    $("td",{text:a.firstChunkMs!=null?a.firstChunkMs+"ms":""}),
+  ])));
+  agents.appendChild($("div",{class:"scroll"},[tb]));
+  const hist = $("div", { class:"card" }, [$("h2",{text:`History (${t.eventCount} events)`})]);
+  const det = $("details");
+  det.appendChild($("summary",{text:"Show full event history"}));
+  const ul = $("div", { class:"mono", style:"font-size:11.5px;line-height:1.6;max-height:400px;overflow-y:auto" });
+  (t.history||[]).forEach(e => ul.appendChild($("div",{text:`${e.seq} ${hhmmss(e.ts)} ${e.type}${e.agent?" ["+e.agent+"]":""} ${e.summary}`})));
+  det.appendChild(ul); hist.appendChild(det);
+  const w = $("div"); w.appendChild(c); w.appendChild(agents); w.appendChild(hist);
+  return w;
+}
+
+function tabLive(t) {
+  const c = $("div");
+  const controls = $("div", { class: "card row" });
+  const seg = $("div", { class: "seg" });
+  for (const f of ["all","claude","codex","claude-code","system"]) {
+    const b = $("button", { text: f === "all" ? "All" : f, "aria-pressed": String(state.filter===f) });
+    b.onclick = () => { state.filter = f; render(); };
+    seg.appendChild(b);
+  }
+  controls.appendChild(seg);
+  const search = $("input", { placeholder: "Search transcript…", value: state.search, style: "max-width:220px" });
+  search.oninput = () => { state.search = search.value; rebuildPanes(); };
+  controls.appendChild(search);
+  const auto = $("button", { class: "btn sec", text: state.autoscroll ? "Pause auto-scroll" : "Resume auto-scroll" });
+  auto.onclick = () => { state.autoscroll = !state.autoscroll; render(); };
+  controls.appendChild(auto);
+  c.appendChild(controls);
+
+  const agents = $("div", { class: "agents" });
+  for (const a of ["claude","codex","claude-code","system"]) {
+    if (state.filter !== "all" && state.filter !== a) continue;
+    const pane = $("div", { class: "apane" });
+    pane.appendChild($("div", { class: "ahead" }, [
+      $("span", { class: "live-dot", id: "dot-" + a }),
+      $("span", { text: a.toUpperCase() }),
+    ]));
+    const log = $("div", { class: "alog", id: "alog-" + a });
+    for (const ch of (paneBufs[a] || [])) if (matchesSearch(ch)) log.appendChild(chunkLine(ch));
+    pane.appendChild(log);
+    const nm = $("div", { class: "newmsg", style: "display:none" });
+    const nb = $("button", { text: "↓ New messages" });
+    nb.onclick = () => { log.scrollTop = log.scrollHeight; nm.style.display = "none"; };
+    nm.appendChild(nb); pane.appendChild(nm);
+    log.onscroll = () => {
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+      if (atBottom) nm.style.display = "none";
+    };
+    agents.appendChild(pane);
+    setTimeout(() => { log.scrollTop = log.scrollHeight; }, 0);
+  }
+  c.appendChild(agents);
+  return c;
+}
+function rebuildPanes() { if (state.view === "task" && state.tab === "live") render(); }
+
+function tabDesign(t) {
+  const c = $("div");
+  if (!t.design) { c.appendChild($("div",{class:"card empty",text:"No design yet."})); return c; }
+  const d = t.design;
+  const cur = $("div", { class: "card" });
+  cur.appendChild($("h2", { text: `Current design — revision ${d.revision}` }));
+  cur.appendChild($("div",{style:"white-space:pre-wrap;font-size:13.5px",text:d.plan}));
+  const sect = (title, arr) => {
+    if (!arr || !arr.length) return;
+    cur.appendChild($("h3",{text:title}));
+    const ul = $("ul",{style:"margin:4px 0;padding-left:20px;font-size:13px"});
+    arr.forEach(x => ul.appendChild($("li",{text: typeof x==="string"?x:(x.text+(x.check?`  [check: ${x.check}]`:""))})));
+    cur.appendChild(ul);
+  };
+  sect("Scope", d.scopeAllowlist); sect("Out of scope", d.outOfScope);
+  sect("Invariants", d.invariants); sect("Predictions", d.predictions);
+  sect("Required tests", d.requiredTests); sect("Acceptance", d.acceptance);
+  c.appendChild(cur);
+  if ((t.designRevisions||[]).length > 1) {
+    const h = $("div",{class:"card"},[$("h2",{text:"Revision history"})]);
+    t.designRevisions.forEach(r => h.appendChild($("div",{class:"tile"},[
+      $("div",{},[$("div",{class:"t",text:`Revision ${r.revision}`}),
+        $("div",{class:"m",text:fmt(r.ts)+(r.applied?.length?` · applied: ${r.applied.join(", ")}`:"")})]),
+    ])));
+    c.appendChild(h);
+  }
+  return c;
+}
+
+function tabFindings(t) {
+  const c = $("div");
+  const fs2 = (t.findings||[]);
+  if (!fs2.length) { c.appendChild($("div",{class:"card empty",text:"No findings."})); return c; }
+  const main = fs2.filter(f => f.severity !== "SUGGESTION");
+  const sugg = fs2.filter(f => f.severity === "SUGGESTION");
+  const card = $("div",{class:"card"},[$("h2",{text:"Findings"})]);
+  const fCard = f => {
+    const b = $("div",{class:"finding"});
+    b.appendChild($("div",{class:"row"},[
+      $("span",{class:"pill "+(f.severity==="CRITICAL"?"s-bad":f.severity==="IMPORTANT"?"s-warn":"s-idle"),text:f.severity}),
+      $("span",{class:"m",style:"color:var(--muted);font-size:12px",text:f.category||""}),
+      $("span",{class:"pill "+(["REJECT","DETERMINISTICALLY_REJECTED"].includes(f.status)?"s-idle":
+        ["FIX","DETERMINISTICALLY_CONFIRMED"].includes(f.status)?"s-ok":
+        f.status==="UNRESOLVED"?"s-warn":"s-idle"),style:"margin-left:auto",text:f.status}),
+    ]));
+    b.appendChild($("div",{style:"margin-top:6px;font-weight:600;font-size:13.5px",text:f.claim}));
+    b.appendChild($("dl",{class:"kv",style:"margin-top:6px"},[
+      $("dt",{text:"File"}),$("dd",{class:"mono",text:f.file||"—"}),
+      $("dt",{text:"Scenario"}),$("dd",{text:f.scenario||"—"}),
+      $("dt",{text:"Decision"}),$("dd",{text:(f.decisionSource||"—")+(f.evidence?` — ${f.evidence}`:"")}),
+    ]));
+    return b;
+  };
+  main.forEach(f => card.appendChild(fCard(f)));
+  c.appendChild(card);
+  if (sugg.length) {
+    const d = $("details",{},[$("summary",{text:`${sugg.length} suggestion(s) — never block`})]);
+    sugg.forEach(f => d.appendChild(fCard(f)));
+    const sc = $("div",{class:"card"}); sc.appendChild(d); c.appendChild(sc);
+  }
+  return c;
+}
+
+function tabTests(t) {
+  const c = $("div");
+  const fast = (t.tests||[]).filter(x => x.tier === "fast-gate");
+  const fin = (t.tests||[]).filter(x => x.tier === "final-acceptance");
+  const block = (title, arr) => {
+    const card = $("div",{class:"card"},[$("h2",{text:title})]);
+    if (!arr.length) { card.appendChild($("div",{class:"empty",text:"none yet"})); return card; }
+    arr.forEach(x => card.appendChild($("div",{class:"row",style:"padding:4px 0"},[
+      $("span",{text:(x.ok?"✓ ":"✗ ")+x.name,style:`color:var(--${x.ok?"ok":"bad"});font-weight:600;font-size:13px`}),
+      $("span",{class:"m",style:"color:var(--muted);font-size:12.5px",text:x.detail+(x.durationMs?` (${dur(x.durationMs)})`:"")}),
+    ])));
+    return card;
+  };
+  c.appendChild(block("FAST GATE", fast));
+  c.appendChild(block("FINAL ACCEPTANCE", fin));
+  return c;
+}
+
+function tabEvidence(t) {
+  const c = $("div");
+  const card = $("div",{class:"card"});
+  card.appendChild($("h3",{text:"Deterministic evidence"}));
+  const det = (t.checks||[]);
+  if (det.length) det.forEach(x => card.appendChild($("div",{style:"padding:3px 0;font-size:13px"},[
+    $("span",{text:(x.ok?"✓ ":"✗ "),style:`color:var(--${x.ok?"ok":"bad"})`}), `${x.name}: ${x.detail}`])));
+  else card.appendChild($("div",{class:"empty",text:"none yet"}));
+  card.appendChild($("h3",{text:"Verified"}));
+  if ((t.verified||[]).length) { const u=$("ul",{style:"padding-left:20px;font-size:13px"}); t.verified.forEach(v=>u.appendChild($("li",{text:v}))); card.appendChild(u); }
+  else card.appendChild($("div",{class:"empty",text:"nothing verified yet"}));
+  card.appendChild($("h3",{text:"Not verified / out of scope"}));
+  if ((t.notVerified||[]).length) { const u=$("ul",{style:"padding-left:20px;font-size:13px"}); t.notVerified.forEach(v=>u.appendChild($("li",{text:v}))); card.appendChild(u); }
+  else card.appendChild($("div",{class:"empty",text:"no declared limits yet"}));
+  card.appendChild($("div",{class:"note",text:"Agent opinion is shown in Findings; it is never visually equivalent to the runtime proof above."}));
+  c.appendChild(card);
+  return c;
+}
+
+let diffText = "";
+async function loadDiff() {
+  try { diffText = (await api(`/api/v2/tasks/${state.taskId}/diff`)).diff; } catch (e) { diffText = "diff unavailable: " + e.message; }
+  render();
+}
+function tabDiff() {
+  const c = $("div",{class:"card"},[$("h2",{text:"Diff vs TASK_BASE_SHA"})]);
+  c.appendChild($("pre",{class:"diff",text:diffText || "Loading…"}));
+  return c;
+}
+
+function tabReport(t) {
+  const c = $("div",{class:"card"},[$("h2",{text:"Report"})]);
+  const lines = [
+    `${t.taskId} — ${t.title}`, ``,
+    `State: ${t.state}   Risk: ${t.risk}   Elapsed: ${dur(t.elapsedMs)}`,
+    `Base: ${t.baseSha}`, `HEAD: ${t.headSha}`,
+    ``, `Design revisions: ${(t.designRevisions||[]).length}`,
+    `Findings: ${(t.findings||[]).length} (${(t.findings||[]).filter(f=>f.severity==="CRITICAL").length} critical)`,
+    `Checks: ${(t.checks||[]).filter(x=>x.ok).length}/${(t.checks||[]).length} passing`,
+    t.merge ? `Merge: ${t.merge.ok ? "MERGED "+short(t.merge.mergeSha) : "failed — "+t.merge.detail}` : `Merge: not attempted`,
+    t.deploy ? `Deploy: ${t.deploy.ok ? "DEPLOYED "+short(t.deploy.deployedSha) : "failed — "+t.deploy.detail}` : `Deploy: not attempted`,
+  ];
+  c.appendChild($("pre",{class:"diff",text:lines.join("\n")}));
+  return c;
+}
+
+function decisionCard(t) {
+  const d = t.awaitingHuman;
+  const c = $("div",{class:"decision"});
+  c.appendChild($("h2",{text:"HUMAN DECISION REQUIRED"}));
+  c.appendChild($("dl",{class:"kv"},[
+    $("dt",{text:"Issue"}),$("dd",{text:d.issue}),
+    $("dt",{text:"Why stopped"}),$("dd",{text:d.whyAutomationStopped}),
+    $("dt",{text:"Evidence"}),$("dd",{text:(d.evidence||[]).join(" · ")}),
+    $("dt",{text:"Recommended"}),$("dd",{style:"font-weight:600",text:d.recommendedAction}),
+    $("dt",{text:"Why"}),$("dd",{text:d.whyRecommended}),
+    $("dt",{text:"Alternatives"}),$("dd",{text:(d.alternatives||[]).join(" / ")}),
+    $("dt",{text:"Risk if approved"}),$("dd",{text:d.riskIfApproved}),
+    $("dt",{text:"Risk if rejected"}),$("dd",{text:d.riskIfRejected}),
+  ]));
+  const mfaIn = state.mfa.enrolled ? $("input",{placeholder:"MFA code",style:"max-width:130px"}) : null;
+  const row = $("div",{class:"row",style:"margin-top:10px"});
+  const approve = $("button",{class:"btn",text:"APPROVE RECOMMENDED ACTION"});
+  approve.onclick = () => decide(t, d, "approve", mfaIn);
+  const reject = $("button",{class:"btn sec",text:"Reject"});
+  reject.onclick = () => decide(t, d, "reject", mfaIn);
+  if (mfaIn) row.appendChild(mfaIn);
+  row.appendChild(approve); row.appendChild(reject);
+  c.appendChild(row);
+  return c;
+}
+async function decide(t, d, choice, mfaIn) {
+  try {
+    await api(`/api/v2/tasks/${t.taskId}/decision`, { method:"POST",
+      body: JSON.stringify({ decisionId: d.decisionId, choice, mfaCode: mfaIn?.value }) });
+    loadTask(t.taskId);
+  } catch (e) { alert(e.message); }
+}
+
+function approveCard(t, kind) {
+  const c = $("div",{class:"decision"});
+  c.appendChild($("h2",{text: kind === "merge" ? "Approve merge to main" : "Approve production deploy"}));
+  c.appendChild($("dl",{class:"kv"},[
+    $("dt",{text:"Reviewed SHA"}),$("dd",{class:"mono",text:t.headSha}),
+    $("dt",{text:"Branch"}),$("dd",{class:"mono",text:t.branch}),
+  ]));
+  c.appendChild($("p",{class:"sub",text: kind === "merge"
+    ? "The server verifies this exact SHA equals the reviewed HEAD and the branch HEAD before merging."
+    : "Deploys origin/main via the audited deploy script (backup + rollback + health checks)."}));
+  const mfaIn = state.mfa.enrolled ? $("input",{placeholder:"MFA code",style:"max-width:130px"}) : null;
+  const btn = $("button",{class:"btn",text: kind === "merge" ? "Approve merge" : "Approve deploy"});
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api(`/api/v2/tasks/${t.taskId}/approve-${kind}`, { method:"POST",
+        body: JSON.stringify({ approvedSha: t.headSha, mfaCode: mfaIn?.value }) });
+      loadTask(t.taskId);
+    } catch (e) { alert(e.message); }
+    btn.disabled = false;
+  };
+  const row = $("div",{class:"row"});
+  if (mfaIn) row.appendChild(mfaIn);
+  row.appendChild(btn);
+  c.appendChild(row);
+  return c;
+}
+
+// ---- OBSERVATORY / SYSTEM -------------------------------------------------
+function viewObservatory() {
+  const m = $("div");
+  const o = state.obs;
+  if (!o) { m.appendChild($("div",{class:"card empty",text:"Loading…"})); return m; }
+  const c = $("div",{class:"card"},[$("h1",{text:"Observatory"})]);
+  if (o.note) c.appendChild($("div",{class:"note",text:o.note}));
+  const tb = $("table");
+  tb.appendChild($("tr",{},[["Task","Evidence","State","Findings","Adjudications","Deterministic overrules"].map(h=>$("th",{text:h}))].flat()));
+  (o.tasks||[]).forEach(t => tb.appendChild($("tr",{},[
+    $("td",{class:"mono",text:t.taskId}),
+    $("td",{},[$("span",{class:"pill s-ok",text:t.provenance})]),
+    $("td",{text:t.state||""}),
+    $("td",{text:String(t.findings)}), $("td",{text:String(t.adjudications)}), $("td",{text:String(t.deterministicOverrules)}),
+  ])));
+  c.appendChild($("div",{class:"scroll"},[tb]));
+  c.appendChild($("p",{class:"sub",style:"margin-top:10px",text:`${o.legacy} V1 legacy task(s) visible read-only under Home.`}));
+  m.appendChild(c);
+  return m;
+}
+
+function viewSystem() {
+  const m = $("div");
+  const s = state.sys;
+  if (!s) { m.appendChild($("div",{class:"card empty",text:"Loading…"})); return m; }
+  const c = $("div",{class:"card"},[$("h1",{text:"System"})]);
+  c.appendChild($("dl",{class:"kv"},[
+    $("dt",{text:"Control plane"}),$("dd",{text:"V2 @ "+s.sha}),
+    $("dt",{text:"Billing"}),$("dd",{text:s.billingMode + (s.paidApiKeys.length?" — PAID KEYS PRESENT!":" (no paid keys)")}),
+    $("dt",{text:"Claude"}),$("dd",{text:s.claude}),
+    $("dt",{text:"Codex"}),$("dd",{text:s.codex}),
+    $("dt",{text:"Stage -1 lock"}),$("dd",{text:s.stage1Lock||"free"}),
+    $("dt",{text:"Redaction"}),$("dd",{text:s.redactionRules+" known env values + pattern rules"}),
+    $("dt",{text:"State root"}),$("dd",{class:"mono",text:s.stateRoot}),
+    $("dt",{text:"Active tasks"}),$("dd",{text:(s.activeTasks||[]).join(", ")||"none"}),
+    $("dt",{text:"Disk"}),$("dd",{text:s.disk}),
+    $("dt",{text:"Memory"}),$("dd",{text:s.memory}),
+    $("dt",{text:"Load"}),$("dd",{text:s.load}),
+  ]));
+  c.appendChild($("h3",{text:"Production"}));
+  (s.production||[]).forEach(l => c.appendChild($("div",{class:"mono",style:"font-size:12px",text:l})));
+  m.appendChild(c);
+
+  const mfa = $("div",{class:"card"},[$("h2",{text:"MFA"})]);
+  if (s.mfa.enrolled) mfa.appendChild($("p",{class:"sub",text:"TOTP enrolled. Merge/deploy/decision approvals require a valid code."}));
+  else {
+    mfa.appendChild($("div",{class:"note",text:"MFA NOT CONFIGURED"}));
+    const b = $("button",{class:"btn",text:"Enroll TOTP"});
+    const out = $("div",{class:"mono",style:"margin-top:8px;word-break:break-all;font-size:12px"});
+    const codeIn = $("input",{placeholder:"6-digit code from your app",style:"max-width:220px;margin-top:8px"});
+    const confirm2 = $("button",{class:"btn sec",text:"Confirm",style:"margin-top:8px"});
+    b.onclick = async () => {
+      const r = await api("/api/v2/mfa/enroll",{method:"POST",body:"{}"});
+      out.textContent = "Add to your authenticator: " + r.otpauth + "   (manual secret: " + r.secret + ")";
+    };
+    confirm2.onclick = async () => {
+      try { await api("/api/v2/mfa/confirm",{method:"POST",body:JSON.stringify({code:codeIn.value})}); await boot(); }
+      catch { alert("invalid code"); }
+    };
+    mfa.appendChild(b); mfa.appendChild(out); mfa.appendChild(codeIn); mfa.appendChild(confirm2);
+  }
+  m.appendChild(mfa);
+  return m;
+}
+
+// ---- login / shell --------------------------------------------------------
+function viewLogin() {
+  const c = $("div",{class:"card center"});
+  c.appendChild($("h1",{text:"Sign in"}));
+  const u = $("input",{placeholder:"Username",autocomplete:"username"});
+  const pw = $("input",{type:"password",placeholder:"Password",autocomplete:"current-password",style:"margin-top:8px"});
+  const err = $("div",{class:"err"});
+  const btn = $("button",{class:"btn",text:"Sign in",style:"width:100%;margin-top:10px"});
+  const submit = async () => {
+    err.textContent = ""; btn.disabled = true;
+    try {
+      const r = await api("/api/v2/login",{method:"POST",body:JSON.stringify({username:u.value,password:pw.value})});
+      state.csrf = r.csrf; await boot();
+    } catch (e) { err.textContent = e.message; btn.disabled = false; }
+  };
+  btn.onclick = submit; pw.onkeydown = e => { if (e.key === "Enter") submit(); };
+  c.appendChild(u); c.appendChild(pw); c.appendChild(btn); c.appendChild(err);
+  return c;
+}
+
+function render() {
+  const nav = document.getElementById("nav");
+  nav.textContent = "";
+  [["home","Home"],["obs","Observatory"],["system","System"]].forEach(([v,label]) => {
+    const b = $("button",{text:label,"aria-current":String(state.view===v)});
+    b.onclick = () => { state.view = v; render(); if (v==="obs") loadObs(); if (v==="system") loadSys(); };
+    nav.appendChild(b);
+  });
+  const out = $("button",{text:"Sign out"});
+  out.onclick = async () => { await api("/api/v2/logout",{method:"POST",body:"{}"}).catch(()=>{}); location.reload(); };
+  nav.appendChild(out);
+  const main = document.getElementById("main");
+  main.textContent = "";
+  main.appendChild(
+    state.view === "task" ? viewTask() :
+    state.view === "obs" ? viewObservatory() :
+    state.view === "system" ? viewSystem() : viewHome());
+}
+
+async function refresh() {
+  try {
+    const t = await api("/api/v2/tasks");
+    state.tasks = t.tasks; state.legacy = t.legacy || [];
+    if (state.view === "home") render();
+  } catch { /* transient */ }
+}
+async function loadObs() { try { state.obs = await api("/api/v2/observatory"); render(); } catch {} }
+async function loadSys() { try { state.sys = await api("/api/v2/system"); render(); } catch {} }
+
+async function boot() {
+  const s = await api("/api/v2/session");
+  state.mfa = s.mfa || {enrolled:false};
+  if (!s.authenticated) {
+    document.getElementById("nav").textContent = "";
+    const main = document.getElementById("main");
+    main.textContent = ""; main.appendChild(viewLogin());
+    return;
+  }
+  state.csrf = s.csrf;
+  await refresh(); render();
+  setInterval(refresh, 15000);
+}
+boot().catch(e => { document.getElementById("main").textContent = "Failed to start: " + e.message; });
+</script>
+</body>
+</html>

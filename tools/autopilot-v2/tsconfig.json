@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2021",
+    "moduleResolution": "node",
+    "esModuleInterop": false,
+    "allowSyntheticDefaultImports": true,
+    "strict": false,
+    "strictNullChecks": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "typeRoots": [
+      "../../packages/server/node_modules/@types",
+      "../../node_modules/@types"
+    ]
+  },
+  "include": [
+    "**/*.ts"
+  ]
+}
