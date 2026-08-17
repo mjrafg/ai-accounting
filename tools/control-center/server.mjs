@@ -23,7 +23,13 @@ import os from 'node:os';
 import { spawn, execFile } from 'node:child_process';
 
 const REPO = process.env.AI_REPO ?? '/srv/ai-accounting/repo';
-const AI_DIR = path.join(REPO, '.ai');
+// Runtime state lives outside the repository so the orchestrator does not dirty
+// the tree it polices. This must match AI_STATE_ROOT in the CLI, or the UI reads
+// a stale copy while the orchestrator writes the live one — a split brain that
+// showed TASK-0007 three events behind and in the wrong state.
+const AI_DIR = process.env.AI_STATE_ROOT ?? path.join(REPO, '.ai');
+/** Versioned config (policies, roles, schema) always lives in the repo. */
+const AI_CONFIG_DIR = path.join(REPO, '.ai');
 const STATE_DIR = process.env.AI_STATE ?? '/srv/ai-accounting/state';
 const CONF_DIR = process.env.AI_CONF ?? '/etc/ai-accounting';
 const HOST = process.env.AI_BIND_HOST ?? '127.0.0.1';
