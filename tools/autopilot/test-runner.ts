@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TestOutcome } from './types';
 import { AI_ROOT, sha256 } from './storage/event-store';
+import { assertDisposableTargets } from './production-guard';
 
 export interface CommandSpec {
   name: string;
@@ -103,6 +104,10 @@ export class TestRunner {
   constructor(private readonly taskId: string) {}
 
   run(spec: CommandSpec): TestOutcome {
+    // Checked on every invocation, not once at startup: the environment file
+    // could change between suites, and a destructive run against production is
+    // not something to discover afterwards.
+    assertDisposableTargets(SERVER_DIR);
     const started = Date.now();
     const res = spawnSync(spec.argv[0], spec.argv.slice(1), {
       cwd: spec.cwd,

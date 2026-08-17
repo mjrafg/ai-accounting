@@ -1,0 +1,12 @@
+{
+  "taskId": "TASK-0004",
+  "title": "Review the repository and summarize the Stage 0 deferred issues. Do not modify any files.",
+  "risk": "low",
+  "state": "READY_TO_MERGE",
+  "branch": "ai/task-0004",
+  "createdAt": "2026-08-17T03:37:41.458Z",
+  "updatedAt": "2026-08-17T04:06:01.589Z",
+  "reviewRounds": 1,
+  "autoMerge": false,
+  "allowlist": []
+}

@@ -21,6 +21,7 @@ import { ClaudeCodeAdapter } from './agents/claude-code';
 import { CodexAdapter } from './agents/codex';
 import { Risk } from './types';
 import { runSelfTests } from './selftest';
+import { MergeManager } from './merge-manager';
 import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -196,6 +197,28 @@ async function main(): Promise<number> {
       return 0;
     }
 
+    case 'merge': {
+      const sub = argv[1];
+      const taskId = argv[2];
+      if (!taskId) fail('usage: ai merge <preflight|approve> TASK-XXXX [--owner <name>]');
+      const mm = new MergeManager(REPO_ROOT, events, tasks, policy);
+      if (sub === 'preflight') {
+        out('RESULT:' + JSON.stringify(mm.preflight(taskId)));
+        return 0;
+      }
+      if (sub === 'approve') {
+        const oi = argv.indexOf('--owner');
+        const owner = oi >= 0 ? argv[oi + 1] : 'unknown';
+        const rec = tasks.deriveTask(taskId);
+        if (!rec) fail(`unknown task ${taskId}`);
+        const r = await mm.approveAndMerge(taskId, owner, rec.risk);
+        out('RESULT:' + JSON.stringify(r));
+        return r.ok ? 0 : 2;
+      }
+      fail('usage: ai merge <preflight|approve> TASK-XXXX');
+      return 1;
+    }
+
     case 'selftest':
       return await runSelfTests(REPO_ROOT);
 
@@ -209,6 +232,8 @@ async function main(): Promise<number> {
       out('  status TASK-XXXX                         derived task state');
       out('  report TASK-XXXX                         rebuild the markdown report');
       out('  validate TASK-XXXX                       verify log integrity + report determinism');
+      out('  merge preflight TASK-XXXX                show everything blocking a merge');
+      out('  merge approve TASK-XXXX --owner <name>   controlled merge (records MERGE_APPROVED)');
       out('  backfill stage0                          reconstruct Stage 0 history');
       out('  selftest                                 run the autopilot self-tests');
       return cmd ? 1 : 0;

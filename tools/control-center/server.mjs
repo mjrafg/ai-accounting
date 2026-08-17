@@ -624,13 +624,37 @@ async function handle(req, res) {
       if (action === 'approve-merge') {
         const t = projectTask(taskId);
         if (!t) return json(res, 404, { error: 'unknown task' });
-        if (t.state !== 'READY_TO_MERGE') return json(res, 409, { error: `task is ${t.state}, not READY_TO_MERGE` });
+        // The authenticated session user is what gets written into the
+        // immutable approval record - not anything the client sends.
+        return runAi(['merge', 'approve', taskId, '--owner', sess.user], (err, stdout, stderr) => {
+          broadcast(taskId);
+          const out = String(stdout ?? '') + String(stderr ?? '');
+          const m = /RESULT:(\{.*\})/.exec(out);
+          let parsed = null;
+          try { parsed = m ? JSON.parse(m[1]) : null; } catch { parsed = null; }
+          if (parsed && parsed.ok) return json(res, 200, parsed);
+          return json(res, 409, parsed ?? { error: 'merge refused', detail: out.slice(-1500) });
+        });
+      }
+      if (action === 'deploy') {
+        const t = projectTask(taskId);
+        if (!t) return json(res, 404, { error: 'unknown task' });
+        if (t.state !== 'MERGED') return json(res, 409, { error: `task is ${t.state}, not MERGED` });
         return json(res, 501, {
-          error: 'controlled merge is not enabled in V1',
-          detail: 'MERGE_APPROVED would be recorded here; the merge itself remains a deliberate human step.',
+          error: 'production deployment from the browser is not enabled yet',
+          detail: 'DEPLOYMENT_APPROVED/DEPLOYED are modelled; the production stack is still being brought up.',
         });
       }
     }
+  }
+
+  const pre = /^\/api\/tasks\/(TASK-\d+)\/merge-preflight$/.exec(p);
+  if (pre && req.method === 'GET') {
+    return runAi(['merge', 'preflight', pre[1]], (err, stdout) => {
+      const m = /RESULT:(\{[\s\S]*\})/.exec(String(stdout ?? ''));
+      try { return json(res, 200, m ? JSON.parse(m[1]) : { ok: false, problems: ['preflight produced no result'] }); }
+      catch { return json(res, 200, { ok: false, problems: ['preflight output could not be parsed'] }); }
+    });
   }
 
   if (p === '/api/metrics' && req.method === 'GET') return json(res, 200, metrics());

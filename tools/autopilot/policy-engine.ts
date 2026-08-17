@@ -37,7 +37,7 @@ export const DEFAULT_POLICY: PolicyConfig = {
   ],
   forbiddenPathPatterns: [
     '(^|/)\\.github/',
-    '(^|/)\\.gitignore$',
+    '^\\.gitignore$',
     '(^|/)pnpm-lock\\.yaml$',
     '(^|/)package-lock\\.json$',
     '(^|/)migrations?/',
@@ -97,6 +97,10 @@ export class PolicyEngine {
   checkProtectedPaths(changedFiles: string[]): PolicyViolation[] {
     const out: PolicyViolation[] = [];
     for (const f of changedFiles) {
+      // Autopilot bookkeeping under .ai/ is not repository configuration; the
+      // .gitignore that scopes its own raw artifacts is not the repo's ignore
+      // file and must not read as a protected-path violation.
+      if (f.startsWith('.ai/')) continue;
       for (const pat of this.policy.forbiddenPathPatterns) {
         if (new RegExp(pat).test(f)) {
           out.push({ rule: 'PROTECTED_PATH', detail: `${f} matches /${pat}/` });
