@@ -145,6 +145,20 @@ function taskIds() {
   return logIds().filter((d) => TASK_ID.test(d));
 }
 
+/** Display-only repair of literal \n stored by the old pnpm-quoted path. */
+function unescapeStoredNewlines(text) {
+  return typeof text === 'string' && !text.includes('\n') && /\\n/.test(text)
+    ? text.replace(/\\r\\n|\\n/g, '\n')
+    : text;
+}
+
+/** First non-empty line, for a scannable list label. */
+function displayTitle(text) {
+  const t = unescapeStoredNewlines(String(text ?? ''));
+  const first = t.split('\n').map((l) => l.trim()).find((l) => l.length) ?? t;
+  return first.length > 120 ? first.slice(0, 119) + '\u2026' : first;
+}
+
 function readEvents(taskId) {
   const p = path.join(AI_DIR, 'tasks', taskId, 'events.jsonl');
   if (!fs.existsSync(p)) return [];
@@ -293,14 +307,17 @@ function projectTask(taskId) {
   return {
     taskId,
     provenance,
-    description: created.payload.description ?? created.payload.title,
+    // Tasks created before the pnpm-escaping fix stored literal "\n" inside the
+    // title. The immutable log is never rewritten, so the two-character sequence
+    // is turned back into a line break for display only.
+    description: unescapeStoredNewlines(created.payload.description ?? created.payload.title),
     designRetries,
     mergeApproved,
     merged,
     deployApproved,
     deployed,
     deployFailed,
-    title: created.payload.title,
+    title: displayTitle(created.payload.title),
     risk: created.payload.risk,
     branch: created.payload.branch,
     createdAt: created.ts,

@@ -49,12 +49,40 @@ export class GitManager {
     }
   }
 
+  /** Commits on `name` that are not reachable from HEAD. */
+  private unmergedCommits(name: string): string[] {
+    if (!this.branchExists(name)) return [];
+    return this.git(['log', '--format=%H', `HEAD..${name}`])
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * Puts the working tree on the task branch, creating it if necessary.
+   *
+   * A retry re-enters an existing task branch that was cut before the fix that
+   * made the retry necessary, so it points at a stale commit. Checking it out
+   * would try to roll the tree back — and the Autopilot's own event log lives in
+   * `.ai/tasks/`, which is tracked, so the checkout is refused outright with
+   * "local changes would be overwritten".
+   *
+   * When the branch carries no commits of its own there is nothing to preserve,
+   * so it is retargeted onto HEAD (`checkout -B`), which moves the ref without
+   * touching a single file. When it DOES carry commits they are the builder's
+   * work: it is checked out normally and never discarded.
+   */
   createBranch(name: string): void {
-    if (this.branchExists(name)) {
+    if (!this.branchExists(name)) {
+      this.git(['checkout', '-b', name]);
+      return;
+    }
+    if (this.currentBranch() === name) return;
+    if (this.unmergedCommits(name).length > 0) {
       this.git(['checkout', name]);
       return;
     }
-    this.git(['checkout', '-b', name]);
+    this.git(['checkout', '-B', name]);
   }
 
   /**

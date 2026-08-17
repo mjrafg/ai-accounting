@@ -17,6 +17,7 @@ import {
   AdjudicationResult,
   AgentAdapter,
   AgentResult,
+  AgentTask,
   Design,
   Finding,
   Risk,
@@ -128,6 +129,10 @@ ${fixes ? `\nCONFIRMED FIXES TO APPLY:\n${JSON.stringify(fixes, null, 2)}\n` : '
 You may only modify files inside scopeAllowlist. If the work genuinely cannot be
 done inside that list, do not expand it: return status SCOPE_EXPANSION_REQUIRED
 with the paths and the reason.
+
+Finish the work before you answer. Do not end your turn while a build or test
+is still running, and do not promise to report the result later — a turn that
+ends without the JSON below is a failed run, whatever was accomplished.
 
 Return ONLY JSON: { "status": "IMPLEMENTED" | "SCOPE_EXPANSION_REQUIRED" |
 "FAILED", "filesChanged": [], "testsAdded": [], "commits": [],
@@ -269,6 +274,71 @@ export class Orchestrator {
     return updated;
   }
 
+
+  /**
+   * Runs an agent step, and retries exactly once when the failure is one a
+   * retry can plausibly fix.
+   *
+   * Every phase needs this, not just design. TASK-0007 got past a design-phase
+   * failure only to lose a 41-turn implementation because the builder ended its
+   * turn with "the e2e gate is running; I'll report the JSON once it lands" —
+   * a healthy envelope (is_error:false, terminal_reason:completed) carrying no
+   * structured result. One reminder recovers that; nothing else did.
+   *
+   * A retry is NOT attempted for a rate-limit pause (the caller handles it) and
+   * the reminder is omitted for execution failures, where no model saw the
+   * prompt at all.
+   */
+  private async runAgentStep(
+    taskId: string,
+    phase: string,
+    agent: AgentAdapter,
+    task: AgentTask,
+    requiredKeys: string[],
+  ): Promise<AgentResult> {
+    let res = await agent.run(task);
+    if (res.ok || res.rateLimited) return res;
+
+    const retryable =
+      res.failureKind === 'ADAPTER_PARSE_ERROR' ||
+      res.failureKind === 'AGENT_SCHEMA_ERROR' ||
+      res.failureKind === 'AGENT_EXECUTION_ERROR';
+    if (!retryable) return res;
+
+    this.d.events.append({
+      taskId,
+      type: 'DESIGN_RETRY',
+      actor: 'orchestrator',
+      payload: {
+        phase,
+        attempt: 2,
+        failureKind: res.failureKind ?? 'UNKNOWN',
+        reason: res.error ?? 'no structured output',
+        providerStatus: res.providerStatus ?? null,
+        rawArtifactHash: res.rawArtifactHash,
+      },
+    });
+    this.log(`  retrying ${phase} once after ${res.failureKind}`);
+
+    const reminder =
+      res.failureKind === 'AGENT_EXECUTION_ERROR'
+        ? ''
+        : `\n\nIMPORTANT: your previous reply could not be used (${res.failureKind}). ` +
+          'Do not end your turn until you have finished the work AND emitted the result. ' +
+          'Reply with a single JSON object and nothing else — no prose before or after, ' +
+          'no markdown fence, no promise to report later. Required keys: ' +
+          `${requiredKeys.join(', ')}.`;
+
+    res = await agent.run({ ...task, prompt: task.prompt + reminder });
+    return res;
+  }
+
+  /** Escalation text that names which layer failed. */
+  private agentFailure(phase: string, res: AgentResult): string {
+    const kind = res.failureKind ?? 'ADAPTER_PARSE_ERROR';
+    return `${phase} failed [${kind}]: ${res.error ?? 'no structured output'}`;
+  }
+
   /** Runs the task to a terminal state. Safe to call again after a crash. */
   async run(taskId: string): Promise<TaskState> {
     let rec = this.d.tasks.deriveTask(taskId);
@@ -319,61 +389,23 @@ export class Orchestrator {
       if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
       this.d.git.createBranch(rec.branch);
 
-      const runDesign = (extra?: string) =>
-        this.d.advisor.run({
+      const res = await this.runAgentStep(
+        taskId,
+        'design phase',
+        this.d.advisor,
+        {
           taskId,
           role: 'design',
-          prompt: designPrompt(this.d.repoRoot, rec) + (extra ?? ''),
+          prompt: designPrompt(this.d.repoRoot, rec),
           schemaName: 'design',
           cwd: this.d.repoRoot,
           timeoutMs: 20 * 60 * 1000,
-        });
-
-      let res = await runDesign();
+        },
+        ['scopeAllowlist', 'outOfScope', 'invariants', 'requiredTests'],
+      );
       if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGNING', res.provider);
-
-      // Exactly one retry, and only for failures a retry can plausibly fix.
-      // A parse or schema failure gets an explicit structured-output reminder; an
-      // execution failure (expired credentials, a transient API error) gets a
-      // plain second attempt, because appending instructions to a request that
-      // never reached a model is pointless. Never more than one.
-      if (!res.ok) {
-        const retryable =
-          res.failureKind === 'ADAPTER_PARSE_ERROR' ||
-          res.failureKind === 'AGENT_SCHEMA_ERROR' ||
-          res.failureKind === 'AGENT_EXECUTION_ERROR';
-        if (retryable) {
-          this.d.events.append({
-            taskId,
-            type: 'DESIGN_RETRY',
-            actor: 'orchestrator',
-            payload: {
-              attempt: 2,
-              failureKind: res.failureKind ?? 'UNKNOWN',
-              reason: res.error ?? 'no structured output',
-              providerStatus: res.providerStatus ?? null,
-              rawArtifactHash: res.rawArtifactHash,
-            },
-          });
-          const remind =
-            res.failureKind === 'AGENT_EXECUTION_ERROR'
-              ? ''
-              : '\n\nIMPORTANT: your previous reply could not be used. Reply with a single ' +
-                'JSON object and nothing else — no prose before or after, no markdown fence. ' +
-                'It must contain the keys: scopeAllowlist, outOfScope, invariants, requiredTests.';
-          res = await runDesign(remind);
-          if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGNING', res.provider);
-        }
-      }
-
       if (!res.ok || !res.structured) {
-        // The failure class is part of the reason. "no JSON object found" for an
-        // expired OAuth token sent a previous investigation at the parser.
-        const kind = res.failureKind ?? 'ADAPTER_PARSE_ERROR';
-        return this.escalate(
-          taskId,
-          `design phase failed [${kind}]: ${res.error ?? 'no structured output'}`,
-        );
+        return this.escalate(taskId, this.agentFailure('design phase', res));
       }
       this.recordAgent(taskId, 'DESIGN_DECISION', 'claude-advisor', res, {
         design: res.structured,
@@ -388,17 +420,23 @@ export class Orchestrator {
     // ---- DESIGN REVIEW (mandatory, independent) ---------------------------
     if (rec.state === 'DESIGNING') {
       this.transition(taskId, rec.state, 'DESIGN_REVIEW');
-      const res = await this.d.reviewer.run({
+      const res = await this.runAgentStep(
+        taskId,
+        'design review',
+        this.d.reviewer,
+        {
         taskId,
         role: 'design-review',
         prompt: designReviewPrompt(this.d.repoRoot, rec, design),
         schemaName: 'design-review',
         cwd: this.d.repoRoot,
         timeoutMs: 20 * 60 * 1000,
-      });
+      },
+        'verdict,findings'.split(','),
+      );
       if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGN_REVIEW', res.provider);
       if (!res.ok || !res.structured) {
-        return this.escalate(taskId, `design review failed: ${res.error ?? 'no structured output'}`);
+        return this.escalate(taskId, this.agentFailure('design review', res));
       }
       const findings = (res.structured.findings as Finding[]) ?? [];
       this.recordAgent(taskId, 'DESIGN_REVIEW', 'codex', res, {
@@ -457,17 +495,23 @@ export class Orchestrator {
     // ---- IMPLEMENT --------------------------------------------------------
     if (rec.state === 'READY_TO_IMPLEMENT') {
       this.transition(taskId, rec.state, 'IMPLEMENTING');
-      const res = await this.d.builder.run({
+      const res = await this.runAgentStep(
+        taskId,
+        'implementation',
+        this.d.builder,
+        {
         taskId,
         role: 'implement',
         prompt: implementPrompt(this.d.repoRoot, rec, design),
         schemaName: 'implementation',
         cwd: this.d.repoRoot,
         timeoutMs: 60 * 60 * 1000,
-      });
+      },
+        'status,filesChanged'.split(','),
+      );
       if (res.rateLimited) return this.pauseForRateLimit(taskId, 'IMPLEMENTING', res.provider);
       if (!res.ok || !res.structured) {
-        return this.escalate(taskId, `implementation failed: ${res.error ?? 'no structured output'}`);
+        return this.escalate(taskId, this.agentFailure('implementation', res));
       }
       this.recordAgent(taskId, 'IMPLEMENTATION', 'claude-code', res, res.structured);
 
@@ -519,17 +563,23 @@ export class Orchestrator {
       this.transition(taskId, rec.state, reviewState);
 
       const diff = this.d.git.diff(baseRef);
-      const res = await this.d.reviewer.run({
+      const res = await this.runAgentStep(
+        taskId,
+        'implementation review',
+        this.d.reviewer,
+        {
         taskId,
         role: round === 1 ? 'review' : 're-review',
         prompt: reviewPrompt(this.d.repoRoot, rec, diff, design),
         schemaName: 'review',
         cwd: this.d.repoRoot,
         timeoutMs: 30 * 60 * 1000,
-      });
+      },
+        'findings'.split(','),
+      );
       if (res.rateLimited) return this.pauseForRateLimit(taskId, reviewState, res.provider);
       if (!res.ok || !res.structured) {
-        return this.escalate(taskId, `implementation review failed: ${res.error ?? 'no structured output'}`);
+        return this.escalate(taskId, this.agentFailure('implementation review', res));
       }
       const findings = (res.structured.findings as Finding[]) ?? [];
       this.d.events.append({
@@ -582,17 +632,23 @@ export class Orchestrator {
 
       rec = this.d.tasks.deriveTask(taskId)!;
       this.transition(taskId, rec.state, 'FIXING');
-      const fixRes = await this.d.builder.run({
+      const fixRes = await this.runAgentStep(
+        taskId,
+        'fix round',
+        this.d.builder,
+        {
         taskId,
         role: 'implement',
         prompt: implementPrompt(this.d.repoRoot, rec, design, confirmed),
         schemaName: 'implementation',
         cwd: this.d.repoRoot,
         timeoutMs: 60 * 60 * 1000,
-      });
+      },
+        'status,filesChanged'.split(','),
+      );
       if (fixRes.rateLimited) return this.pauseForRateLimit(taskId, 'FIXING', fixRes.provider);
       if (!fixRes.ok || !fixRes.structured) {
-        return this.escalate(taskId, `fix round ${round} failed: ${fixRes.error ?? 'no structured output'}`);
+        return this.escalate(taskId, this.agentFailure(`fix round ${round}`, fixRes));
       }
       this.d.events.append({
         taskId,
