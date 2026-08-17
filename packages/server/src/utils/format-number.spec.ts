@@ -85,19 +85,27 @@ describe('formatNumber (characterization)', () => {
       });
 
       expect(formatted).toBe('($1,234.50)');
-      expect(formatted.includes('-')).toBe(false);
     });
 
     // HAZARD: any unrecognised negativeFormat resolves to `undefined`, which
     // `accounting` then dereferences — a bad setting throws at format time
     // instead of falling back to a sane default.
     it('throws for an unrecognised negativeFormat on a negative value', () => {
-      expect(() =>
+      let thrown: unknown;
+
+      try {
         formatNumber(-1234.5, {
           negativeFormat: 'unsupported',
           currencyCode: 'USD',
-        }),
-      ).toThrow();
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect((thrown as TypeError).message).toBe(
+        "Cannot read properties of undefined (reading 'replace')",
+      );
     });
   });
 
@@ -106,7 +114,6 @@ describe('formatNumber (characterization)', () => {
       const formatted = formatNumber(0, { excerptZero: true, zeroSign: '-' });
 
       expect(formatted).toBe('-');
-      expect(/[0-9]/.test(formatted)).toBe(false);
     });
 
     it('renders an empty string when excerptZero is on and no zeroSign is given', () => {
