@@ -87,9 +87,17 @@ export class WorktreeManager {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       try { fs.symlinkSync(src, dst); excludes.push(rel); } catch { /* already there */ }
     }
-    const envSrc = path.join(this.controlRepo, '.env');
-    if (fs.existsSync(envSrc) && !fs.existsSync(path.join(dest, '.env'))) {
-      fs.copyFileSync(envSrc, path.join(dest, '.env'));
+    // Both env files: the root one (DB endpoints for the e2e runner) and the
+    // server package one (full app config incl. S3/redis/throttle). Missing the
+    // second made every stage0 module init die on "bucket is required".
+    for (const envRel of ['.env', 'packages/server/.env']) {
+      const envSrc = path.join(this.controlRepo, envRel);
+      const envDst = path.join(dest, envRel);
+      if (fs.existsSync(envSrc) && !fs.existsSync(envDst)) {
+        fs.mkdirSync(path.dirname(envDst), { recursive: true });
+        fs.copyFileSync(envSrc, envDst);
+      }
+      if (!excludes.includes(envRel)) excludes.push(envRel);
     }
     // Per-worktree hook disable (needs worktreeConfig on the shared repo).
     this.git(['config', 'extensions.worktreeConfig', 'true'], this.controlRepo, true);
