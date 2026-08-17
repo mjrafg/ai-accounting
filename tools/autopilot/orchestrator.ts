@@ -377,8 +377,22 @@ export class Orchestrator {
       return this.escalate(taskId, `builder unavailable: ${builderAvail.reason}`);
     }
 
-    const baseRef = String(
-      (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
+    // The base this attempt is measured against.
+    //
+    // A retry retargets the task branch onto current HEAD, which by definition
+    // has moved since the task was created — that is why the retry exists. The
+    // baseRef recorded at creation is then stale, and diffing against it
+    // attributes every unrelated commit made in between to the builder. That is
+    // exactly what happened on TASK-0007: eleven tooling files from the fix that
+    // enabled the retry were reported as out-of-allowlist builder edits.
+    //
+    // BASE_REF_UPDATED is appended rather than TASK_CREATED being rewritten, so
+    // the rebasing is visible in the log instead of silently changing history.
+    const baseUpdates = this.d.tasks.byType(taskId, 'BASE_REF_UPDATED');
+    let baseRef = String(
+      baseUpdates.length
+        ? (baseUpdates[baseUpdates.length - 1].payload as any).baseRef
+        : (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
     );
 
     // ---- DESIGN -----------------------------------------------------------
@@ -388,6 +402,22 @@ export class Orchestrator {
     if (rec.state === 'NEW' || (rec.state === 'DESIGNING' && !this.currentDesign(taskId))) {
       if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
       this.d.git.createBranch(rec.branch);
+
+      // Nothing has been built yet, so HEAD here is this attempt's true base.
+      const headNow = this.d.git.head();
+      if (headNow !== baseRef) {
+        this.d.events.append({
+          taskId,
+          type: 'BASE_REF_UPDATED',
+          actor: 'orchestrator',
+          payload: {
+            baseRef: headNow,
+            previousBaseRef: baseRef,
+            reason: 'task branch re-anchored onto current HEAD for this attempt',
+          },
+        });
+        baseRef = headNow;
+      }
 
       const res = await this.runAgentStep(
         taskId,
