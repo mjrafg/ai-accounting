@@ -72,17 +72,22 @@ export class GitManager {
    * touching a single file. When it DOES carry commits they are the builder's
    * work: it is checked out normally and never discarded.
    */
-  createBranch(name: string): void {
+  createBranch(name: string): { retargeted: boolean } {
     if (!this.branchExists(name)) {
       this.git(['checkout', '-b', name]);
-      return;
+      return { retargeted: false };
     }
-    if (this.currentBranch() === name) return;
-    if (this.unmergedCommits(name).length > 0) {
-      this.git(['checkout', name]);
-      return;
+    const hasOwnWork = this.unmergedCommits(name).length > 0;
+    if (hasOwnWork) {
+      if (this.currentBranch() !== name) this.git(['checkout', name]);
+      return { retargeted: false };
     }
+    // No commits of its own: safe to move the ref onto HEAD. Reports the move so
+    // the caller can re-anchor the scope baseline, which would otherwise still
+    // point at the commit the branch was originally cut from.
+    const before = this.git(['rev-parse', name]).trim();
     this.git(['checkout', '-B', name]);
+    return { retargeted: this.git(['rev-parse', name]).trim() !== before };
   }
 
   /**

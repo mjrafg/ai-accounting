@@ -388,6 +388,13 @@ export class Orchestrator {
     //
     // BASE_REF_UPDATED is appended rather than TASK_CREATED being rewritten, so
     // the rebasing is visible in the log instead of silently changing history.
+    // Establish the task branch before any phase runs, not inside the design
+    // block. A retry that already has a design skips that block entirely, so the
+    // branch was never re-established and the baseline was never re-anchored —
+    // which is why the same eleven unrelated files were attributed to the
+    // builder twice.
+    const branchMove = this.d.git.createBranch(rec.branch);
+
     const baseUpdates = this.d.tasks.byType(taskId, 'BASE_REF_UPDATED');
     let baseRef = String(
       baseUpdates.length
@@ -395,15 +402,10 @@ export class Orchestrator {
         : (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
     );
 
-    // ---- DESIGN -----------------------------------------------------------
-    // Also runs when the task is already DESIGNING but has no design recorded:
-    // a crash (or an operator retry after an escalation) must re-run the phase
-    // rather than fall through to "no design available".
-    if (rec.state === 'NEW' || (rec.state === 'DESIGNING' && !this.currentDesign(taskId))) {
-      if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
-      this.d.git.createBranch(rec.branch);
-
-      // Nothing has been built yet, so HEAD here is this attempt's true base.
+    // Only when the branch actually moved, and only before anything is built —
+    // a branch carrying the builder's commits is never retargeted, so this
+    // cannot silently re-baseline real work out of scope.
+    if (branchMove.retargeted) {
       const headNow = this.d.git.head();
       if (headNow !== baseRef) {
         this.d.events.append({
@@ -418,6 +420,14 @@ export class Orchestrator {
         });
         baseRef = headNow;
       }
+    }
+
+    // ---- DESIGN -----------------------------------------------------------
+    // Also runs when the task is already DESIGNING but has no design recorded:
+    // a crash (or an operator retry after an escalation) must re-run the phase
+    // rather than fall through to "no design available".
+    if (rec.state === 'NEW' || (rec.state === 'DESIGNING' && !this.currentDesign(taskId))) {
+      if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
 
       const res = await this.runAgentStep(
         taskId,
