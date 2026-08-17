@@ -17,7 +17,8 @@ import { Orchestrator } from './core/orchestrator';
 import { loadKnownSecrets, redact } from './core/redact';
 import { bannedKeysPresent, BILLING_MODE } from './core/agents';
 import { mfaStatus, mfaBeginEnroll, mfaConfirmEnroll, mfaCheck } from './core/mfa';
-import { stageMinus1Lock } from './core/checks';
+import { stageMinus1Lock, deployLock } from './core/checks';
+import { getDeploymentSettings, setAutomaticDeployment } from './core/settings';
 import { TaskRecord } from './core/types';
 
 const HOST = process.env.AI_BIND_HOST ?? '172.17.0.1';
@@ -150,7 +151,7 @@ function legacyTasks() {
 }
 
 function observatory() {
-  const ids = events.listTasks();
+  const ids = events.listTasks().filter((id) => /^TASK-V2-\d+$/.test(id));
   const tasks = ids.map((id) => {
     const evs = events.read(id);
     return {
@@ -189,6 +190,7 @@ async function systemStatus() {
     codex: fs.existsSync('/home/aiaccounting/.codex') ? 'authenticated (subscription)' : 'unknown',
     stage1Lock: stageMinus1Lock.holder(),
     mfa: mfaStatus(),
+    deployment: { ...getDeploymentSettings(), activeDeployment: deployLock.holder() },
     redactionRules: redactCount,
     production: prodHealth.split('\n').filter(Boolean),
     disk, memory: `${Math.round(os.freemem() / 2 ** 30)}G free of ${Math.round(os.totalmem() / 2 ** 30)}G`,
@@ -381,6 +383,41 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         return json(res, r.ok ? 200 : 409, r);
       }
     }
+  }
+
+  // ---- Deployment settings (the ONLY setting the browser can write) ------
+  if (p === '/api/v2/settings/deployment' && req.method === 'GET') {
+    return json(res, 200, {
+      ...getDeploymentSettings(),
+      // A deploy already executing is never killed by the toggle; it finishes
+      // its transaction (including rollback) safely.
+      activeDeployment: deployLock.holder(),
+      readyToDeploy: orch.readyToDeployTasks(),
+    });
+  }
+  if (p === '/api/v2/settings/deployment' && (req.method === 'PATCH' || req.method === 'POST')) {
+    if (rateGate('deploy', ip)) return json(res, 429, { error: 'rate limited' });
+    if (req.headers['x-csrf-token'] !== sess.csrf) return json(res, 403, { error: 'csrf token mismatch' });
+    const body = await readBody(req);
+    if (typeof body.automaticProductionDeployment !== 'boolean') {
+      return json(res, 400, { error: 'automaticProductionDeployment must be a boolean' });
+    }
+    const change = setAutomaticDeployment(body.automaticProductionDeployment, sess.user);
+    // Immutable audit record — actor is the authenticated session user.
+    events.append({
+      taskId: 'SYSTEM-SETTINGS', type: 'SETTING_CHANGED', payload: {
+        setting: 'automaticProductionDeployment',
+        from: change.from, to: change.to, actor: sess.user,
+      },
+    });
+    const continued: string[] = [];
+    if (change.to && body.continueReadyTasks !== false) {
+      for (const id of orch.readyToDeployTasks()) {
+        continued.push(id);
+        orch.run(id).catch(() => undefined);
+      }
+    }
+    return json(res, 200, { ...getDeploymentSettings(), continued });
   }
 
   if (p === '/api/v2/observatory' && req.method === 'GET') return json(res, 200, observatory());

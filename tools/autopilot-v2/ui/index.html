@@ -97,7 +97,7 @@ const $ = (t, attrs = {}, kids = []) => {
   for (const k of [].concat(kids)) if (k) el.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
   return el;
 };
-const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null,
+const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null, dep:null,
   es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false} };
 
 async function api(path, opts = {}) {
@@ -148,6 +148,16 @@ function viewHome() {
   c.appendChild(err);
   m.appendChild(c);
 
+  if (state.dep) {
+    const on = state.dep.automaticProductionDeployment;
+    m.appendChild($("div", { class: "card row" }, [
+      $("span", { style: "font-weight:700;letter-spacing:.03em", text: "AUTOMATIC DEPLOYMENT" }),
+      $("span", { class: "pill " + (on ? "s-ok" : "s-warn"), text: on ? "● ENABLED" : "● PAUSED" }),
+      $("span", { class: "m", style: "color:var(--muted);font-size:12.5px", text: on
+        ? "eligible tasks deploy automatically after all policy gates"
+        : "tasks stop at READY_TO_DEPLOY — change under System → Deployment Settings" }),
+    ]));
+  }
   if (!state.mfa.enrolled) m.appendChild($("div", { class: "note", text: "MFA NOT CONFIGURED — enroll on the System page to require a TOTP code for merge/deploy approvals." }));
 
   const groups = [
@@ -261,6 +271,9 @@ function viewTask() {
   head.appendChild(acts);
   m.appendChild(head);
 
+  if (t.state === "READY_TO_DEPLOY" && state.dep && !state.dep.automaticProductionDeployment) {
+    m.appendChild($("div", { class: "note", text: "Waiting because automatic production deployment is paused. This is a global operational hold, not a task problem — the task continues when deployment is re-enabled (System → Deployment Settings) or on manual approval below." }));
+  }
   if (t.awaitingHuman) m.appendChild(decisionCard(t));
   if (t.state === "READY_TO_MERGE") m.appendChild(approveCard(t, "merge"));
   if (t.state === "READY_TO_DEPLOY") m.appendChild(approveCard(t, "deploy"));
@@ -593,6 +606,49 @@ function viewSystem() {
   (s.production||[]).forEach(l => c.appendChild($("div",{class:"mono",style:"font-size:12px",text:l})));
   m.appendChild(c);
 
+  const dep = $("div",{class:"card"},[$("h2",{text:"Deployment Settings"})]);
+  if (state.dep) {
+    const on = state.dep.automaticProductionDeployment;
+    dep.appendChild($("div",{class:"row"},[
+      $("span",{style:"font-weight:700",text:"Automatic Production Deployment"}),
+      $("span",{class:"pill "+(on?"s-ok":"s-warn"),text:on?"● ENABLED":"● PAUSED"}),
+    ]));
+    dep.appendChild($("p",{class:"sub",style:"margin-top:6px",text:on
+      ? "ON — Autopilot may deploy automatically after all deployment policy gates pass (backup, rollback, preflight, health, no CRITICAL findings). The toggle bypasses none of them."
+      : "OFF — all automatic production deployments stop at READY_TO_DEPLOY."}));
+    dep.appendChild($("div",{class:"mono",style:"font-size:11.5px;color:var(--muted)",
+      text:`technical: AI_V2_HOLD_DEPLOY=${on?0:1} · source: ${state.dep.source}` +
+        (state.dep.updatedBy?` · last changed by ${state.dep.updatedBy} at ${fmt(state.dep.updatedAt)}`:"")}));
+    if (state.dep.activeDeployment) {
+      dep.appendChild($("div",{class:"note",text:"A deployment is already in progress and will finish safely — the toggle never interrupts an executing deploy: "+state.dep.activeDeployment}));
+    }
+    const ready = state.dep.readyToDeploy || [];
+    if (!on && ready.length) {
+      dep.appendChild($("div",{class:"note",text:`${ready.length} task(s) waiting at READY_TO_DEPLOY: ${ready.join(", ")}`}));
+    }
+    const cont = $("input",{type:"checkbox",style:"width:auto",checked:true,id:"dep-cont"});
+    const contRow = $("label",{class:"row",style:"margin-top:10px;font-size:13px;display:"+(on?"none":"flex")},[
+      cont, $("span",{text:"Automatically continue currently READY_TO_DEPLOY tasks when enabling"}),
+    ]);
+    dep.appendChild(contRow);
+    const btn = $("button",{class:"btn "+(on?"danger":""),style:"margin-top:10px",
+      text:on?"Turn OFF automatic deployment":"Turn ON automatic deployment"});
+    btn.onclick = async () => {
+      const next = !on;
+      if (!confirm(next
+        ? "Enable automatic production deployment? Eligible tasks will deploy without further approval once every policy gate passes."
+        : "Pause automatic production deployment? New deployments stop at READY_TO_DEPLOY; an executing deployment finishes safely.")) return;
+      btn.disabled = true;
+      try {
+        state.dep = await api("/api/v2/settings/deployment",{method:"PATCH",
+          body:JSON.stringify({automaticProductionDeployment:next, continueReadyTasks: next ? cont.checked : undefined})});
+        render();
+      } catch (e) { alert(e.message); btn.disabled = false; }
+    };
+    dep.appendChild(btn);
+  } else dep.appendChild($("div",{class:"empty",text:"Loading…"}));
+  m.appendChild(dep);
+
   const mfa = $("div",{class:"card"},[$("h2",{text:"MFA"})]);
   if (s.mfa.enrolled) mfa.appendChild($("p",{class:"sub",text:"TOTP enrolled. Merge/deploy/decision approvals require a valid code."}));
   else {
@@ -662,7 +718,7 @@ async function refresh() {
   } catch { /* transient */ }
 }
 async function loadObs() { try { state.obs = await api("/api/v2/observatory"); render(); } catch {} }
-async function loadSys() { try { state.sys = await api("/api/v2/system"); render(); } catch {} }
+async function loadSys() { try { state.sys = await api("/api/v2/system"); state.dep = await api("/api/v2/settings/deployment"); render(); } catch {} }
 
 async function boot() {
   const s = await api("/api/v2/session");
@@ -674,6 +730,7 @@ async function boot() {
     return;
   }
   state.csrf = s.csrf;
+  try { state.dep = await api("/api/v2/settings/deployment"); } catch { /* first paint without it */ }
   await refresh(); render();
   setInterval(refresh, 15000);
 }

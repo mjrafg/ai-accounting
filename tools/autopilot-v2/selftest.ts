@@ -22,6 +22,7 @@ import {
 } from './core/checks';
 import * as policy from './core/policy';
 import { totp, verifyTotp, base32Encode } from './core/mfa';
+import { getDeploymentSettings, setAutomaticDeployment, automaticDeploymentEnabled } from './core/settings';
 import { Finding } from './core/types';
 
 let passed = 0, failed = 0;
@@ -288,6 +289,59 @@ async function main(): Promise<number> {
     });
     check('decision has recommendation + risks', Boolean(d.recommendedAction && d.riskIfApproved && d.riskIfRejected));
     check('decision names its trigger', d.issue.startsWith('[REBASELINE]'));
+  }
+
+  // ---- deployment settings toggle ----------------------------------------
+  section('deployment settings: defaults, persistence, policy, audit');
+  {
+    const prevEnv = process.env.AI_V2_HOLD_DEPLOY;
+    // default derivation, no persisted file (fresh AI_V2_STATE tmp dir)
+    process.env.AI_V2_HOLD_DEPLOY = '1';
+    check('HOLD=1 → automatic deployment OFF by default',
+      getDeploymentSettings().automaticProductionDeployment === false &&
+      getDeploymentSettings().source === 'env-default');
+    process.env.AI_V2_HOLD_DEPLOY = '0';
+    check('HOLD=0 → automatic deployment ON by default',
+      getDeploymentSettings().automaticProductionDeployment === true);
+
+    // persisted setting overrides the env default, atomically, across "restarts"
+    process.env.AI_V2_HOLD_DEPLOY = '1';
+    const ch1 = setAutomaticDeployment(true, 'selftest-owner');
+    check('toggle ON persists and reports the transition', ch1.from === false && ch1.to === true);
+    check('persisted ON overrides HOLD=1', getDeploymentSettings().automaticProductionDeployment === true &&
+      getDeploymentSettings().source === 'persisted');
+    check('settings file exists outside git', fs.existsSync(path.join(process.env.AI_V2_STATE!, 'settings.json')));
+    // a fresh read (new process would do the same: nothing cached) = restart survival
+    check('survives service restart (re-read from disk)', automaticDeploymentEnabled() === true);
+    const ch2 = setAutomaticDeployment(false, 'selftest-owner');
+    check('toggle OFF persists', ch2.to === false && automaticDeploymentEnabled() === false);
+    check('updatedBy recorded, no session secrets in file',
+      getDeploymentSettings().updatedBy === 'selftest-owner' &&
+      !fs.readFileSync(path.join(process.env.AI_V2_STATE!, 'settings.json'), 'utf8').includes('cookie'));
+
+    // policy: OFF blocks a new deployment decision; ON permits only with green gates
+    check('OFF blocks new automatic deployment', automaticDeploymentEnabled() === false);
+    setAutomaticDeployment(true, 'selftest-owner');
+    const green: policy.GateSummary = { deterministicOk: true, testsOk: true, criticalOpen: 0,
+      evidenceConflict: false, backupVerified: true, rollbackShaExists: true, protectedTriggerHit: false };
+    check('ON alone does not bypass backup gate',
+      !policy.autoDeployAllowed('low', { ...green, backupVerified: false }).allowed);
+    check('ON alone does not bypass rollback gate',
+      !policy.autoDeployAllowed('low', { ...green, rollbackShaExists: false }).allowed);
+    check('ON alone does not bypass CRITICAL gate',
+      !policy.autoDeployAllowed('high', { ...green, criticalOpen: 1 }).allowed);
+    check('ON + green gates permits deployment', policy.autoDeployAllowed('high', green).allowed);
+
+    // audit event
+    const ev = new EventStore();
+    ev.append({ taskId: 'SYSTEM-SETTINGS', type: 'SETTING_CHANGED', payload: {
+      setting: 'automaticProductionDeployment', from: false, to: true, actor: 'selftest-owner' } });
+    const audit = ev.read('SYSTEM-SETTINGS').filter((e) => e.type === 'SETTING_CHANGED');
+    check('audit event written and immutable-chain valid',
+      audit.length >= 1 && ev.verify('SYSTEM-SETTINGS').ok);
+
+    setAutomaticDeployment(false, 'selftest-owner'); // leave the fixture OFF
+    if (prevEnv === undefined) delete process.env.AI_V2_HOLD_DEPLOY; else process.env.AI_V2_HOLD_DEPLOY = prevEnv;
   }
 
   console.log(`\nV2 self-tests: ${passed} passed, ${failed} failed`);

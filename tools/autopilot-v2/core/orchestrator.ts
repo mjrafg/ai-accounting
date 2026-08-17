@@ -20,6 +20,7 @@ import { runAgentBounded, bannedKeysPresent, AgentSpec } from './agents';
 import { WorktreeManager } from './worktrees';
 import * as checks from './checks';
 import * as policy from './policy';
+import { automaticDeploymentEnabled } from './settings';
 
 const CONTROL_REPO = process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo';
 const DEPLOY_BIN = process.env.AI_DEPLOY_BIN ?? '/srv/ai-accounting/bin/deploy-production';
@@ -288,12 +289,17 @@ export class Orchestrator {
       const g2 = this.gateSummary(taskId);
       const dep = policy.autoDeployAllowed(rec.risk, g2);
       if (rec.state === 'MERGED') this.setState(taskId, 'MERGED', 'READY_TO_DEPLOY', 'deploy', '', { autoDeploy: dep });
-      // Owner directive: production stays untouched while V2 is being proven.
-      // The hold is configuration (env), visible in the event log, and removed
-      // deliberately — never silently by a task.
-      if (process.env.AI_V2_HOLD_DEPLOY === '1') {
-        this.events.append({ taskId, type: 'NOTE', payload: {
-          deployHeld: 'AI_V2_HOLD_DEPLOY=1 — production deploys held during V2 acceptance (owner directive)' } });
+      // The owner's web toggle, read at DECISION TIME so a change is effective
+      // immediately, no restart. This is a global operational hold, not a task
+      // uncertainty — the task stays READY_TO_DEPLOY, never AWAITING_HUMAN,
+      // and continues the moment the toggle is enabled.
+      if (!automaticDeploymentEnabled()) {
+        this.events.append({ taskId, type: 'AUTOMATIC_DEPLOYMENT_HELD', payload: {
+          reason: 'automatic production deployment is paused by the owner setting',
+          setting: 'automaticProductionDeployment=false',
+        } });
+        this.stream.append(taskId, 'system', 'lifecycle',
+          'waiting: automatic production deployment is paused (owner setting)');
         return 'READY_TO_DEPLOY';
       }
       if (!dep.allowed) {
@@ -732,6 +738,13 @@ export class Orchestrator {
     this.events.append({ taskId, type: 'NOTE', payload: { retryAuthorized: by, reenteringAt: last } });
     this.setState(taskId, 'ESCALATED', last, 'retry', `by ${by}`);
     return true;
+  }
+
+  /** READY_TO_DEPLOY tasks eligible to continue when the toggle turns on. */
+  readyToDeployTasks(): string[] {
+    return this.events.listTasks()
+      .filter((id) => /^TASK-V2-\d+$/.test(id))
+      .filter((id) => this.task(id)?.state === 'READY_TO_DEPLOY');
   }
 
   resolveHumanDecision(taskId: string, decisionId: string, choice: string, by: string): boolean {

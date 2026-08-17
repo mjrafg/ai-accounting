@@ -51,6 +51,8 @@ export type EventType =
   | 'MERGE_RESULT'
   | 'DEPLOY_RESULT'
   | 'TASK_CANCELLED'
+  | 'SETTING_CHANGED'
+  | 'AUTOMATIC_DEPLOYMENT_HELD'
   | 'NOTE';
 
 export interface V2Event {
