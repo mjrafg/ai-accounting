@@ -191,9 +191,10 @@ async function main(): Promise<number> {
       const ri = argv.indexOf('--reason');
       const reason = ri >= 0 ? String(argv[ri + 1]) : 'operator retry after escalation';
       const orch = new Orchestrator(defaultDeps(REPO_ROOT, policy));
-      const rec = orch.authorizeRetry(taskId, owner, reason);
+      const fresh = argv.includes('--fresh-design');
+      const rec = orch.authorizeRetry(taskId, owner, reason, fresh);
       if (!rec) fail(`unknown task ${taskId}`);
-      out(`${taskId} re-entering at ${rec!.state} (authorized by ${owner})`);
+      out(`${taskId} re-entering at ${rec!.state} (authorized by ${owner}${fresh ? ', fresh design' : ''})`);
       const state = await orch.run(taskId);
       const after = tasks.deriveTask(taskId)!;
       tasks.writeCache(after);
@@ -320,6 +321,7 @@ async function main(): Promise<number> {
       out('  run TASK-XXXX                            run a task to a terminal state');
       out('  resume TASK-XXXX                         continue a task after a crash');
       out('  retry TASK-XXXX --owner <name>           re-run an ESCALATED task from design');
+      out('    [--fresh-design]                       discard an inconsistent design and redo it once');
       out('  status TASK-XXXX                         derived task state');
       out('  report TASK-XXXX                         rebuild the markdown report');
       out('  validate TASK-XXXX                       verify log integrity + report determinism');

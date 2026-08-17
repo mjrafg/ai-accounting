@@ -257,7 +257,7 @@ export class Orchestrator {
    * task, brief and history are kept; the authorisation is recorded before
    * anything re-runs, and every gate runs again from DESIGNING.
    */
-  authorizeRetry(taskId: string, owner: string, reason: string): TaskRecord | null {
+  authorizeRetry(taskId: string, owner: string, reason: string, freshDesign = false): TaskRecord | null {
     const rec = this.d.tasks.deriveTask(taskId);
     if (!rec) return null;
     if (rec.state !== 'ESCALATED') {
@@ -275,6 +275,10 @@ export class Orchestrator {
         reason,
         retryingFrom: 'ESCALATED',
         reenteringAt: 'DESIGNING',
+        // When the recorded design is internally inconsistent, re-reviewing it
+        // is pointless — it has to be produced again, once, with the prior
+        // adjudications applied into the text rather than appended beside it.
+        freshDesign,
         priorEscalations,
       },
     });
@@ -343,6 +347,33 @@ export class Orchestrator {
     return res;
   }
 
+  /**
+   * The corrections a re-design must incorporate, taken from the immutable log.
+   *
+   * Previous rounds appended the adjudicated fixes next to the wording they were
+   * meant to replace, so the design kept both and reviewers could reach opposite
+   * conclusions from it. The instruction is explicit that superseded text is to
+   * be removed, not annotated.
+   */
+  private priorAdjudicationsBrief(taskId: string): string {
+    const adj = this.d.tasks.byType(taskId, 'ADJUDICATION').map((e) => e.payload as any);
+    if (!adj.length) return '';
+    const lines = adj
+      .filter((a) => a.verdict === 'CONFIRMED' || a.verdict === 'PARTIAL')
+      .map((a) => `- ${a.findingId} (${a.verdict}): ${a.requiredFix ?? a.reasoning}`);
+    if (!lines.length) return '';
+    return (
+      '\n\nThis is a re-design. The design previously recorded for this task is ' +
+      'internally inconsistent: earlier corrections were appended beside the wording ' +
+      'they replace, so both survive and the acceptance criteria contradict each other.\n\n' +
+      'Apply every correction below IN PLACE. Delete the superseded wording entirely — ' +
+      'do not append, annotate or keep it as history. The result must contain exactly one ' +
+      'statement of each invariant and each acceptance requirement.\n\n' +
+      'ADJUDICATED CORRECTIONS TO APPLY:\n' +
+      lines.join('\n')
+    );
+  }
+
   /** Escalation text that names which layer failed. */
   private agentFailure(phase: string, res: AgentResult): string {
     const kind = res.failureKind ?? 'ADAPTER_PARSE_ERROR';
@@ -404,8 +435,15 @@ export class Orchestrator {
     // is never measured: that is what made eleven Autopilot files look like
     // builder edits. The boundary is physical — the infrastructure is simply not
     // in the tree being diffed — not a path filter applied afterwards.
+    // Latest recorded base wins. Tasks created before task worktrees existed
+    // recorded a control-plane commit as their base; re-anchoring is an appended
+    // BASE_REF_UPDATED rather than a rewrite of TASK_CREATED, so the change of
+    // baseline stays visible instead of being swapped underneath the history.
+    const baseUpdates = this.d.tasks.byType(taskId, 'BASE_REF_UPDATED');
     const baseRef = String(
-      (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
+      baseUpdates.length
+        ? (baseUpdates[baseUpdates.length - 1].payload as any).baseRef
+        : (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
     );
     const wt = this.d.worktrees.ensure(taskId, rec.branch, baseRef);
     if (wt.created) {
@@ -431,7 +469,20 @@ export class Orchestrator {
     // Also runs when the task is already DESIGNING but has no design recorded:
     // a crash (or an operator retry after an escalation) must re-run the phase
     // rather than fall through to "no design available".
-    if (rec.state === 'NEW' || (rec.state === 'DESIGNING' && !this.currentDesign(taskId))) {
+    // A fresh design is requested if the most recent RETRY_AUTHORIZED asked for
+    // one and was recorded after the last design.
+    const lastDesignSeq = Math.max(
+      0,
+      ...this.d.tasks.byType(taskId, 'DESIGN_DECISION').map((e) => e.seq),
+    );
+    const lastRetry = this.d.tasks.byType(taskId, 'RETRY_AUTHORIZED').slice(-1)[0];
+    const freshDesignRequested =
+      !!lastRetry && (lastRetry.payload as any).freshDesign === true && lastRetry.seq > lastDesignSeq;
+
+    if (
+      rec.state === 'NEW' ||
+      (rec.state === 'DESIGNING' && (!this.currentDesign(taskId) || freshDesignRequested))
+    ) {
       if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
 
       const res = await this.runAgentStep(
@@ -441,7 +492,9 @@ export class Orchestrator {
         {
           taskId,
           role: 'design',
-          prompt: designPrompt(this.d.repoRoot, rec),
+          prompt:
+            designPrompt(this.d.repoRoot, rec) +
+            (freshDesignRequested ? this.priorAdjudicationsBrief(taskId) : ''),
           schemaName: 'design',
           cwd: wt.path,
           timeoutMs: 20 * 60 * 1000,
