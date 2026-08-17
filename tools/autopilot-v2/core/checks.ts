@@ -337,6 +337,44 @@ export function cacheLedgerReconciliation(toleranceAbs = 0.005): CheckResult {
 const PREDICTION_ALLOWED = [/^node(_modules\/\.bin\/(jest|tsc))? /, /^node -e /, /^node_modules\/\.bin\//];
 
 /**
+ * Agents habitually prefix checks with `cd packages/server && ` even though the
+ * executor already runs there. Normalize that exact prefix away instead of
+ * rejecting the whole check — a safelist that silently discards the evidence
+ * step is worse than none (TASK-V2-0005 R-1 shipped undecided this way).
+ */
+export function normalizeCheckCommand(cmd: string): string {
+  let c = cmd.trim();
+  const m = /^cd\s+(?:\.\/)?packages\/server\/?\s*(?:&&|;)\s*/.exec(c);
+  if (m) c = c.slice(m[0].length).trim();
+  return c;
+}
+
+/**
+ * Shell-less tokenizer: splits on whitespace, honoring single/double quotes so
+ * `node -e "…code with spaces…"` survives intact. No shell ever interprets the
+ * command; metacharacters are only dangerous OUTSIDE quotes, where they would
+ * signal an attempted chain/redirect — those are reported and refused.
+ */
+export function splitCommand(cmd: string): { args: string[]; unquotedMeta: string | null } {
+  const args: string[] = [];
+  let cur = '', quote: '"' | "'" | null = null, meta: string | null = null, has = false;
+  for (const ch of cmd) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; has = true; continue; }
+    if (/\s/.test(ch)) { if (has || cur) { args.push(cur); cur = ''; has = false; } continue; }
+    if (';&|><`$'.includes(ch)) meta = meta ?? ch;
+    cur += ch;
+  }
+  if (has || cur) args.push(cur);
+  if (quote) meta = meta ?? 'unterminated quote';
+  return { args, unquotedMeta: meta };
+}
+
+/**
  * Runs the predictions the design made executable. Free-prose predictions are
  * reported NOT VERIFIED rather than silently collected as documentation.
  */
@@ -347,18 +385,51 @@ export function runPredictionChecks(worktree: string, predictions: Array<{ text:
   const server = path.join(worktree, 'packages/server');
   for (const [i, p] of predictions.entries()) {
     if (!p.check) { unverified.push(p.text); continue; }
-    const cmd = p.check.trim();
-    if (!PREDICTION_ALLOWED.some((re) => re.test(cmd)) || /[;&|><`$]/.test(cmd)) {
-      unverified.push(`${p.text} (check rejected by safelist: ${cmd.slice(0, 80)})`);
+    const cmd = normalizeCheckCommand(p.check);
+    const { args: argv, unquotedMeta } = splitCommand(cmd);
+    if (!PREDICTION_ALLOWED.some((re) => re.test(cmd)) || unquotedMeta || argv.length === 0) {
+      unverified.push(`${p.text} (check rejected by safelist${unquotedMeta ? ` [${unquotedMeta}]` : ''}: ${cmd.slice(0, 80)})`);
       continue;
     }
     const t0 = Date.now();
-    const [bin, ...args] = cmd.split(/\s+/);
+    const [bin, ...args] = argv;
     const r = run(bin.startsWith('node_modules') ? path.join(server, bin) : bin, args, server, 10 * 60_000, toolEnv());
     results.push({ name: `prediction-${i + 1}`, ok: r.code === 0, durationMs: Date.now() - t0,
       detail: `${p.text.slice(0, 140)} → ${r.code === 0 ? 'HELD' : `FAILED: ${r.out.slice(-200)}`}` });
   }
   return { results, unverified };
+}
+
+/**
+ * The single consumer for a TEST_TO_DECIDE adjudication. Runs the proposed
+ * check (exit 0 = the code is right = finding refuted) and NEVER returns the
+ * undecided status back: if the check cannot run, the finding is UNRESOLVED
+ * with the reason on the record — an unanswered evidence question must stay
+ * visibly open, not silently pass review.
+ */
+export function decideTestToDecide(worktree: string, findingId: string, check?: string): {
+  status: 'DETERMINISTICALLY_CONFIRMED' | 'DETERMINISTICALLY_REJECTED' | 'UNRESOLVED';
+  decisionSource: 'deterministic' | 'policy';
+  evidence: string;
+  result?: CheckResult;
+} {
+  const raw = (check ?? '').trim();
+  if (!raw) {
+    return { status: 'UNRESOLVED', decisionSource: 'policy',
+      evidence: 'adjudicated TEST_TO_DECIDE without an executable check; finding remains unresolved' };
+  }
+  const { results, unverified } = runPredictionChecks(worktree, [{ text: `finding ${findingId}`, check: raw }]);
+  const r = results[0];
+  if (!r) {
+    return { status: 'UNRESOLVED', decisionSource: 'policy',
+      evidence: `TEST_TO_DECIDE check could not be executed (${(unverified[0] ?? 'rejected').slice(0, 220)}); ` +
+        'finding remains unresolved rather than silently passing review' };
+  }
+  const named: CheckResult = { ...r, name: `test-to-decide:${findingId}` };
+  return {
+    status: r.ok ? 'DETERMINISTICALLY_REJECTED' : 'DETERMINISTICALLY_CONFIRMED',
+    decisionSource: 'deterministic', evidence: named.detail, result: named,
+  };
 }
 
 // ---------------------------------------------------------------------------

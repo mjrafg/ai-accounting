@@ -394,18 +394,20 @@ export class Orchestrator {
       let status = ['FIX', 'TEST_TO_DECIDE', 'DEFER', 'REJECT'].includes(a.status) ? a.status : 'DEFER';
       let source: Finding['decisionSource'] = 'agent';
       let evidence = String(a.reasoning ?? '').slice(0, 400);
-      if (status === 'TEST_TO_DECIDE' && a.check) {
-        const { results } = checks.runPredictionChecks(cwd, [{ text: a.findingId, check: String(a.check) }]);
-        const r = results[0];
-        if (r) {
-          this.check(taskId, phase, r);
-          status = r.ok ? 'DETERMINISTICALLY_REJECTED' : 'DETERMINISTICALLY_CONFIRMED';
-          source = 'deterministic';
-          evidence = r.detail;
-        }
+      let proposedCheck: string | null = null;
+      if (status === 'TEST_TO_DECIDE') {
+        // TEST_TO_DECIDE may never leave adjudication undecided: the check runs
+        // and the exit code decides, or the finding is explicitly UNRESOLVED.
+        proposedCheck = a.check ? String(a.check) : null;
+        const d = checks.decideTestToDecide(cwd, String(a.findingId), proposedCheck ?? undefined);
+        if (d.result) this.check(taskId, phase, d.result);
+        status = d.status;
+        source = d.decisionSource;
+        evidence = d.evidence;
       }
       this.events.append({ taskId, type: 'ADJUDICATION', phase,
-        payload: { findingId: a.findingId, status, decisionSource: source, evidence, selfAdjudicationRisk: selfRisk } });
+        payload: { findingId: a.findingId, status, decisionSource: source, evidence, selfAdjudicationRisk: selfRisk,
+          ...(proposedCheck ? { check: proposedCheck } : {}) } });
     }
     if (revised && phase === 'design') {
       // ONE canonical artifact: corrections applied in place, next revision.
@@ -518,7 +520,14 @@ export class Orchestrator {
         return 'ok';
       }
 
-      if (!toFix.length) return 'ok';
+      if (!toFix.length) {
+        // Nothing adjudicated-FIX, but any still-open material finding must be
+        // on the record as a documented disagreement, never a silent pass.
+        if (openMaterial.length) this.events.append({ taskId, type: 'NOTE', payload: {
+          disagreementRecorded: openMaterial.map((f) => f.findingId),
+          resolution: 'no adjudicated-FIX findings; unresolved material documented, deterministic gates decide' } });
+        return 'ok';
+      }
       if (cycle >= budget.materialCycles) {
         const crit = policy.unresolvedCritical(after);
         if (crit.length) {
@@ -813,7 +822,7 @@ Reply ONLY JSON: {"findings": [{"findingId": "D-1", "severity": "...", "category
 }
 
 function adjudicatePrompt(rec: TaskRecord, findings: Finding[], d: DesignRevision, isDesign: boolean): string {
-  return `Adjudicate these findings CONCISELY. For each: status FIX | TEST_TO_DECIDE | DEFER | REJECT, one short reasoning. If TEST_TO_DECIDE, provide "check": an executable command (node_modules/.bin/jest …, node_modules/.bin/tsc …, or node -e "…") relative to packages/server whose exit code decides it — the evidence outranks both of you.
+  return `Adjudicate these findings CONCISELY. For each: status FIX | TEST_TO_DECIDE | DEFER | REJECT, one short reasoning. If TEST_TO_DECIDE, provide "check": ONE executable command (node_modules/.bin/jest …, node_modules/.bin/tsc …, or node -e "…") whose exit code decides it (exit 0 = the code is correct = finding refuted) — the evidence outranks both of you. The command already runs inside packages/server: no "cd", no "&&" chains, no shell redirection.
 ${isDesign ? 'If any finding is FIX, also return "revisedDesign": the COMPLETE corrected design object (same shape as the original) with every correction applied IN PLACE. Superseded wording must be deleted, not annotated. There is exactly one canonical design.' : ''}
 
 TASK ${rec.taskId} (risk=${rec.risk})

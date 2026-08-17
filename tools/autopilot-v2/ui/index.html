@@ -211,6 +211,10 @@ function tile(t) {
 function goTask(id) {
   if (state.rep.timer) clearInterval(state.rep.timer);
   state.rep = freshRep();
+  // Cross-task isolation: nothing from the previous task may survive the
+  // switch — stale detail or pane buffers would misreport this task's state.
+  state.detail = null; state.lastId = 0;
+  for (const k of Object.keys(paneBufs)) delete paneBufs[k];
   state.view = "task"; state.taskId = id; state.tab = "live"; render(); loadTask(id); openStream(id);
 }
 function goLegacy(id) {
@@ -225,7 +229,11 @@ function goLegacy(id) {
 }
 
 async function loadTask(id) {
-  try { state.detail = await api("/api/v2/tasks/" + id); render(); } catch { /* transient */ }
+  try {
+    const d = await api("/api/v2/tasks/" + id);
+    if (state.taskId !== id) return; // stale response from a previous task
+    state.detail = d; render();
+  } catch { /* transient */ }
 }
 
 function openStream(id) {
@@ -541,7 +549,11 @@ function faBlock(md) {
   return root;
 }
 async function loadReports(id) {
-  try { const j = await api(`/api/v2/tasks/${id}/reports`); state.rep.history = j.reports || []; } catch { /* transient */ }
+  try {
+    const j = await api(`/api/v2/tasks/${id}/reports`);
+    if (state.taskId !== id) return; // stale response from a previous task
+    state.rep.history = j.reports || [];
+  } catch { /* transient */ }
 }
 function initReportTab(id) {
   if (state.rep.loaded) return;

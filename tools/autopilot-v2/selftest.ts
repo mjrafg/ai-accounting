@@ -13,12 +13,13 @@ import * as path from 'path';
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-selftest-'));
 process.env.AI_V2_STATE = path.join(TMP, 'state');
 
-import { EventStore, StreamLog, deriveTask, currentDesign } from './core/store';
+import { EventStore, StreamLog, deriveTask, currentDesign, allFindings } from './core/store';
 import { redact, loadKnownSecrets, looksSecret } from './core/redact';
 import { parseStructured, inspectEnvelope, looksRateLimited } from './core/parsers';
 import { WorktreeManager } from './core/worktrees';
 import {
   assertDisposableTargets, ProductionEndpointError, GlobalLock, normalizeFailure, compareSignatures,
+  normalizeCheckCommand, splitCommand, decideTestToDecide, runPredictionChecks,
 } from './core/checks';
 import * as policy from './core/policy';
 import { totp, verifyTotp, base32Encode } from './core/mfa';
@@ -347,6 +348,73 @@ async function main(): Promise<number> {
 
     setAutomaticDeployment(false, 'selftest-owner'); // leave the fixture OFF
     if (prevEnv === undefined) delete process.env.AI_V2_HOLD_DEPLOY; else process.env.AI_V2_HOLD_DEPLOY = prevEnv;
+  }
+
+  // ---- TEST_TO_DECIDE must be consumed, never dropped ---------------------
+  section('adjudication TEST_TO_DECIDE: check executes, finding resolves, review can exit');
+  {
+    const wt = fs.mkdtempSync(path.join(TMP, 'ttd-'));
+    fs.mkdirSync(path.join(wt, 'packages/server'), { recursive: true });
+
+    // normalization: the exact shape that shipped undecided in TASK-V2-0005
+    check('cd-prefix normalized away',
+      normalizeCheckCommand('cd packages/server && node -e "process.exit(0)"') === 'node -e "process.exit(0)"');
+    check('cd with semicolon normalized', normalizeCheckCommand('cd packages/server; node -e "x"') === 'node -e "x"');
+    check('cd to elsewhere NOT normalized (stays rejected)',
+      normalizeCheckCommand('cd / && node -e "x"').startsWith('cd /'));
+
+    // tokenizer: quoted payloads survive; unquoted metachars are flagged
+    const tok = splitCommand('node -e "const a = 1; process.exit(a === 1 ? 0 : 1)"');
+    check('quoted -e payload kept as ONE argument with spaces and semicolons',
+      tok.args.length === 3 && tok.args[2] === 'const a = 1; process.exit(a === 1 ? 0 : 1)' && tok.unquotedMeta === null);
+    check('unquoted metachar flagged', splitCommand('node -e "x" && rm x').unquotedMeta === '&');
+    check('unterminated quote flagged', splitCommand('node -e "x').unquotedMeta !== null);
+
+    // execution: exit code decides; the undecided status can never survive
+    const rejected = decideTestToDecide(wt, 'R-1', 'cd packages/server && node -e "process.exit(0)"');
+    check('exit 0 → finding DETERMINISTICALLY_REJECTED (code is right)',
+      rejected.status === 'DETERMINISTICALLY_REJECTED' && rejected.decisionSource === 'deterministic');
+    check('deterministic result named for the finding', rejected.result?.name === 'test-to-decide:R-1');
+    const confirmed = decideTestToDecide(wt, 'R-2', 'node -e "process.exit(1)"');
+    check('exit 1 → finding DETERMINISTICALLY_CONFIRMED', confirmed.status === 'DETERMINISTICALLY_CONFIRMED');
+    const unrunnable = decideTestToDecide(wt, 'R-3', 'rm -rf /tmp/x');
+    check('non-safelisted check → UNRESOLVED with reason, never silently passing',
+      unrunnable.status === 'UNRESOLVED' && unrunnable.decisionSource === 'policy' &&
+      unrunnable.evidence.includes('could not be executed'));
+    const noCheck = decideTestToDecide(wt, 'R-4', undefined);
+    check('TEST_TO_DECIDE without a check → UNRESOLVED', noCheck.status === 'UNRESOLVED');
+    for (const d of [rejected, confirmed, unrunnable, noCheck]) {
+      check(`no path returns the undecided status (${d.status})`, (d.status as string) !== 'TEST_TO_DECIDE');
+    }
+
+    // prediction checks accept the same previously-rejected shapes
+    const pred = runPredictionChecks(wt, [
+      { text: 'spec passes', check: 'cd packages/server && node -e "process.exit(0)"' },
+      { text: 'prose only' },
+    ]);
+    check('design prediction with cd-prefix now executes', pred.results.length === 1 && pred.results[0].ok);
+    check('prose prediction still reported NOT VERIFIED', pred.unverified.length === 1);
+
+    // full regression: FINDING → ADJUDICATION with the decided status →
+    // review-loop filters see it resolved → REVIEW exits automatically.
+    const ev = new EventStore();
+    const tid = 'TASK-V2-9200';
+    ev.append({ taskId: tid, type: 'TASK_CREATED', payload: { title: 't', description: 'd', risk: 'medium', branch: 'b', baseSha: 'a1', worktree: wt } });
+    ev.append({ taskId: tid, type: 'STATE_CHANGED', payload: { from: 'VERIFY', to: 'REVIEW' } });
+    ev.append({ taskId: tid, type: 'FINDING', phase: 'review', payload: { findings: [{
+      findingId: 'R-1', severity: 'IMPORTANT', category: 'test correctness',
+      claim: 'expects the wrong extension', scenario: 'concrete scenario text long enough', status: 'UNRESOLVED' }] } });
+    const dec = decideTestToDecide(wt, 'R-1', 'node -e "process.exit(0)"');
+    ev.append({ taskId: tid, type: 'DETERMINISTIC_CHECK', phase: 'review', payload: { ...dec.result } });
+    ev.append({ taskId: tid, type: 'ADJUDICATION', phase: 'review', payload: {
+      findingId: 'R-1', status: dec.status, decisionSource: dec.decisionSource, evidence: dec.evidence } });
+    const after = allFindings(ev, tid);
+    check('finding status resolved from adjudication', after[0].status === 'DETERMINISTICALLY_REJECTED');
+    const toFix = after.filter((f) => f.status === 'FIX' || f.status === 'DETERMINISTICALLY_CONFIRMED');
+    const openMaterial = policy.materialFindings(after).filter((f) =>
+      ['UNRESOLVED', 'FIX', 'DETERMINISTICALLY_CONFIRMED'].includes(f.status));
+    check('review-loop filters: nothing to fix, nothing open → REVIEW exits automatically',
+      toFix.length === 0 && openMaterial.length === 0);
   }
 
   // ---- Persian reporting --------------------------------------------------
