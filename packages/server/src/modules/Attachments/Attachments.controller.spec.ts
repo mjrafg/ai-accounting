@@ -57,3 +57,63 @@ describe('AttachmentsController authorization', () => {
     }
   });
 });
+
+// Uses the real mime-types dependency (not mocked) so a broken import binding
+// surfaces here the same way it does at runtime.
+describe('AttachmentsController getAttachment', () => {
+  const bytes = Uint8Array.from([0x25, 0x50, 0x44, 0x46]);
+
+  const makeController = (contentType?: string) => {
+    const attachmentsApplication = {
+      get: jest.fn().mockResolvedValue({
+        Body: { transformToByteArray: async () => bytes },
+        ContentType: contentType,
+      }),
+    } as any;
+    const controller = new AttachmentsController(
+      attachmentsApplication,
+      {} as any,
+      {} as any,
+    );
+    const res = {
+      headers: {} as Record<string, string>,
+      body: undefined as any,
+      set(name: string, value: string) {
+        this.headers[name] = value;
+      },
+      send(payload: any) {
+        this.body = payload;
+      },
+    };
+    return { controller, res };
+  };
+
+  it.each<[string, string]>([
+    ['image/jpeg', 'jpeg'],
+    ['application/pdf', 'pdf'],
+    ['text/plain', 'txt'],
+  ])(
+    'responds with Content-Type %s and filename extension .%s',
+    async (contentType, extension) => {
+      const { controller, res } = makeController(contentType);
+
+      await controller.getAttachment(res as any, 'doc-1');
+
+      expect(res.headers['Content-Type']).toBe(contentType);
+      expect(res.headers['Content-Disposition']).toBe(
+        `filename="doc-1.${extension}"`,
+      );
+      expect(res.body).toEqual(Buffer.from(bytes));
+    },
+  );
+
+  it('defaults to application/octet-stream with a .bin filename when ContentType is missing', async () => {
+    const { controller, res } = makeController(undefined);
+
+    await controller.getAttachment(res as any, 'doc-2');
+
+    expect(res.headers['Content-Type']).toBe('application/octet-stream');
+    expect(res.headers['Content-Disposition']).toBe('filename="doc-2.bin"');
+    expect(res.body).toEqual(Buffer.from(bytes));
+  });
+});
