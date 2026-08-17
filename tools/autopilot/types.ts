@@ -5,6 +5,9 @@
  * reports, metrics) is a pure function of the log and must be rebuildable.
  */
 
+import { AgentFailureKind } from './parsers/structured-output';
+export { AgentFailureKind };
+
 export type Risk = 'low' | 'medium' | 'high';
 
 export type TaskState =
@@ -57,6 +60,8 @@ export type EventType =
   | 'DEPLOYMENT_APPROVED'
   | 'DEPLOYED'
   | 'DEPLOYMENT_FAILED'
+  | 'DESIGN_RETRY'
+  | 'RETRY_AUTHORIZED'
   | 'BACKFILL_GAP'
   | 'EVIDENCE_CONFLICT'
   | 'POLICY_BLOCK';
@@ -102,7 +107,10 @@ export interface AutopilotEvent {
 
 export interface TaskRecord {
   taskId: string;
+  /** Short scannable label. */
   title: string;
+  /** Full operator brief, line breaks intact. Falls back to the title. */
+  description: string;
   risk: Risk;
   state: TaskState;
   branch: string;
@@ -147,6 +155,13 @@ export interface AgentResult {
    * is exhausted. This is a pause, never a reason to fall back to paid API use.
    */
   rateLimited?: boolean;
+  /**
+   * Which layer failed. Present only when `ok` is false. Kept distinct so an
+   * operational failure (expired credentials) is never reported as a parser bug.
+   */
+  failureKind?: AgentFailureKind;
+  /** HTTP status the provider reported, when it reported one. */
+  providerStatus?: number;
 }
 
 export interface AgentAdapter {

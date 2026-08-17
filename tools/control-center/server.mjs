@@ -162,21 +162,34 @@ function readEvents(taskId) {
     .filter(Boolean);
 }
 
+/**
+ * Workflow phases, each with the evidence that proves it actually completed.
+ *
+ * Entering a state is not the same as finishing the phase. TASK-0007 escalated
+ * because Claude's design could not be used, yet the UI showed "Claude design:
+ * done" purely because the task had reached DESIGNING — which is exactly the
+ * kind of reassuring-but-false projection this whole system exists to avoid. A
+ * phase is `done` only when the event that constitutes its output is present.
+ */
 const PHASES = [
-  ['Claude design', ['DESIGNING']],
-  ['Codex design review', ['DESIGN_REVIEW']],
-  ['Claude adjudication', ['DESIGN_ADJUDICATION']],
-  ['Claude Code implementation', ['IMPLEMENTING']],
-  ['Tests', ['TESTING']],
-  ['Pre-review acceptance', ['PRE_REVIEW_ACCEPTANCE']],
-  ['Codex implementation review', ['CODEX_REVIEW']],
-  ['Adjudication', ['ADJUDICATION']],
-  ['Fixes', ['FIXING']],
-  ['Codex re-review', ['RE_REVIEW']],
-  ['Final acceptance', ['FINAL_ACCEPTANCE']],
-  ['Ready to merge', ['READY_TO_MERGE']],
-  ['Merged', ['MERGED']],
-  ['Deployed to production', ['DEPLOYED']],
+  ['Claude design', ['DESIGNING'], (ev) => ev.some((e) => e.type === 'DESIGN_DECISION')],
+  ['Codex design review', ['DESIGN_REVIEW'], (ev) => ev.some((e) => e.type === 'DESIGN_REVIEW')],
+  ['Claude adjudication', ['DESIGN_ADJUDICATION'],
+    (ev) => ev.some((e) => e.type === 'DESIGN_DECISION' && e.payload?.final === true)],
+  ['Claude Code implementation', ['IMPLEMENTING'], (ev) => ev.some((e) => e.type === 'IMPLEMENTATION')],
+  ['Tests', ['TESTING'], (ev) => ev.some((e) => e.type === 'TEST_RESULT')],
+  ['Pre-review acceptance', ['PRE_REVIEW_ACCEPTANCE'],
+    (ev) => ev.some((e) => e.type === 'RUNTIME_EVIDENCE' && e.payload?.tier === 'pre-review')],
+  ['Codex implementation review', ['CODEX_REVIEW'], (ev) => ev.some((e) => e.type === 'FINDING')],
+  ['Adjudication', ['ADJUDICATION'], (ev) => ev.some((e) => e.type === 'ADJUDICATION')],
+  ['Fixes', ['FIXING'], (ev) => ev.some((e) => e.type === 'FIX')],
+  ['Codex re-review', ['RE_REVIEW'],
+    (ev) => ev.some((e) => e.type === 'FINDING' && Number(e.payload?.round ?? 1) > 1)],
+  ['Final acceptance', ['FINAL_ACCEPTANCE'],
+    (ev) => ev.some((e) => e.type === 'RUNTIME_EVIDENCE' && e.payload?.tier === 'final' && e.payload?.ok === true)],
+  ['Ready to merge', ['READY_TO_MERGE'], (ev) => ev.some((e) => e.type === 'READY_TO_MERGE')],
+  ['Merged', ['MERGED'], (ev) => ev.some((e) => e.type === 'MERGED')],
+  ['Deployed to production', ['DEPLOYED'], (ev) => ev.some((e) => e.type === 'DEPLOYED')],
 ];
 
 /** Derives everything the UI shows from the event log alone. */
@@ -199,22 +212,34 @@ function projectTask(taskId) {
     else if (e.type === 'PAUSED_RATE_LIMIT') state = 'PAUSED_RATE_LIMIT';
   }
 
-  const timeline = PHASES.map(([label, states]) => {
-    const reached = states.some((s) => visited.has(s));
-    const current = states.includes(state);
-    return { label, status: current ? 'running' : reached ? 'done' : 'pending' };
+  // The state the task was in when it escalated: that phase failed, it did not
+  // complete, and it is not "running" either.
+  let escalatedFrom = null;
+  if (state === 'ESCALATED') {
+    let last = 'NEW';
+    for (const e of events) {
+      if (e.type === 'STATE_TRANSITION') last = e.payload.to;
+      else if (e.type === 'ESCALATION') { escalatedFrom = last; break; }
+    }
+  }
+
+  const timeline = PHASES.map(([label, states, hasEvidence]) => {
+    const done = hasEvidence(events);
+    const failedHere = escalatedFrom !== null && states.includes(escalatedFrom) && !done;
+    const current = state !== 'ESCALATED' && states.includes(state) && !done;
+    return {
+      label,
+      status: done ? 'done' : failedHere ? 'failed' : current ? 'running' : 'pending',
+    };
   });
   // Reaching a terminal state means every phase before it completed, even if a
   // resumed run never emitted an explicit transition for one of them. Merge and
   // deploy are separate approvals, so they are NOT back-filled: a merged task
   // must still show "Deployed to production" as pending until it really is.
-  const TERMINAL_BACKFILL = { READY_TO_MERGE: 11, MERGED: 12, DEPLOYED: 13 };
-  const upto = TERMINAL_BACKFILL[state];
-  if (upto) {
-    for (let i = 0; i < upto && i < timeline.length; i += 1) {
-      if (timeline[i].status === 'pending') timeline[i].status = 'done';
-    }
-  }
+  // No back-filling. Reaching a terminal state used to mark every earlier phase
+  // done regardless of whether it happened, which both hid failures and claimed
+  // phases that never ran — a task needing no fixes would still report "Fixes:
+  // done". A phase with no evidence stays pending, which is what is true.
   const doneCount = timeline.filter((t) => t.status === 'done').length;
 
   const findings = [];
@@ -263,9 +288,13 @@ function projectTask(taskId) {
     : events.some((e) => e.reconstructed) ? 'HISTORICAL / RECONSTRUCTED'
     : 'LIVE';
 
+  const designRetries = events.filter((e) => e.type === 'DESIGN_RETRY').map((e) => e.payload);
+
   return {
     taskId,
     provenance,
+    description: created.payload.description ?? created.payload.title,
+    designRetries,
     mergeApproved,
     merged,
     deployApproved,
@@ -413,12 +442,35 @@ function metrics() {
 // Autopilot invocation — fixed verbs only, never a shell
 // ---------------------------------------------------------------------------
 
-const AI_BIN = ['bash', '-lc'];
+/**
+ * Invokes the Autopilot CLI directly — no shell, no `pnpm`.
+ *
+ * There were two reasons to stop going through `bash -lc "pnpm ai …"`:
+ *
+ *  1. `pnpm` escapes newlines in appended script arguments into the literal
+ *     two-character sequence `\n`. A multi-line task description typed in the
+ *     browser was stored with `\n` showing as text. Invoking ts-node directly
+ *     preserves it exactly; verified both ways before changing this.
+ *  2. It removes shell quoting from the path that carries user- and
+ *     agent-influenced text. argv goes straight to execFile, so there is no
+ *     metacharacter surface to get wrong.
+ */
+const TS_NODE = process.env.AI_TS_NODE ??
+  path.join(REPO, 'packages/server/node_modules/.bin/ts-node');
+const CLI_ENTRY = path.join(REPO, 'tools/autopilot/cli.ts');
+const CLI_TSCONFIG = path.join(REPO, 'tools/autopilot/tsconfig.json');
+
+function aiArgv(args) {
+  return [TS_NODE, '--transpile-only', '-P', CLI_TSCONFIG, CLI_ENTRY, ...args.map(String)];
+}
+
 function runAi(args, cb, timeout = 120000) {
-  // args is a fixed-shape array built here, never from user text except the
-  // task title, which is passed as a single argv element (no shell parsing).
-  const quoted = args.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
-  execFile(AI_BIN[0], [AI_BIN[1], `cd ${REPO} && pnpm ai ${quoted}`], { timeout, maxBuffer: 32 * 1024 * 1024 }, cb);
+  const argv = aiArgv(args);
+  execFile(argv[0], argv.slice(1), {
+    cwd: REPO,
+    timeout,
+    maxBuffer: 32 * 1024 * 1024,
+  }, cb);
 }
 
 /** Pulls the single RESULT: line the CLI verbs print. */
@@ -478,7 +530,9 @@ const DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
 
 function startRun(taskId) {
   if (running.has(taskId)) return false;
-  const child = spawn(AI_BIN[0], [AI_BIN[1], `cd ${REPO} && pnpm ai run ${taskId}`], {
+  const argv = aiArgv(['run', taskId]);
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd: REPO,
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -751,10 +805,12 @@ async function handle(req, res) {
   if (p === '/api/tasks' && req.method === 'POST') {
     let body;
     try { body = await readBody(req); } catch { return json(res, 400, { error: 'bad body' }); }
-    const title = String(body.title ?? '').trim().slice(0, 500);
+    // The composer sends one free-text brief. It is stored whole as the
+    // description; the title is derived from it by the CLI.
+    const description = String(body.title ?? body.description ?? '').trim().slice(0, 8000);
     const risk = ['low', 'medium', 'high'].includes(body.risk) ? body.risk : 'high';
-    if (!title) return json(res, 400, { error: 'a description is required' });
-    return runAi(['task', 'create', '--risk', risk, title], (err, stdout, stderr) => {
+    if (!description) return json(res, 400, { error: 'a description is required' });
+    return runAi(['task', 'create', '--risk', risk, '--description', description], (err, stdout, stderr) => {
       if (err) return json(res, 500, { error: 'task creation failed', detail: String(stderr || err.message).slice(0, 2000) });
       const m = /(TASK-\d+)/.exec(stdout ?? '');
       const taskId = m ? m[1] : null;

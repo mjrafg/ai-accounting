@@ -60,6 +60,7 @@ ol.tl{list-style:none;margin:0;padding:0}
 ol.tl li{display:flex;gap:10px;align-items:center;padding:7px 0;font-size:14px}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--pend);flex:none}
 .dot.done{background:var(--ok)} .dot.running{background:var(--accent)}
+.dot.failed{background:var(--bad)}
 .kv{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:6px 14px;font-size:14px}
 .kv dt{color:var(--muted)} .kv dd{margin:0;word-break:break-word}
 ul.ev{list-style:none;margin:0;padding:0}
@@ -80,6 +81,7 @@ th{color:var(--muted);font-weight:600}
 .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:14px}
 .finding{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:9px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.brief{white-space:pre-wrap;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:13.5px;color:var(--muted)}
 .center{max-width:400px;margin:9vh auto}
 .err{color:var(--bad);font-size:13.5px;min-height:19px}
 @media(max-width:520px){.hrow{padding:10px 12px}main{padding:14px 12px 60px}.kv{grid-template-columns:1fr}}
@@ -296,6 +298,14 @@ function viewTask(t) {
   head.appendChild($("div", { class: "bar" }, [$("i", { style: "width:" + t.progress + "%" })]));
   if (t.reconstructed) head.appendChild($("div", { class: "note", style: "margin-top:10px", text: "Reconstructed history — rebuilt from git and prior reports, not observed live." }));
   if (t.simulated) head.appendChild($("div", { class: "note", style: "margin-top:10px", text: "Simulated run — fixture replay, not a live model. Cannot certify a merge." }));
+  if (t.description && t.description !== t.title) {
+    // pre-wrap so the operator's own line breaks survive; still textContent.
+    head.appendChild($("div", { class: "brief", text: t.description }));
+  }
+  if (t.designRetries && t.designRetries.length) {
+    t.designRetries.forEach(r => head.appendChild($("div", { class: "note", style: "margin-top:10px",
+      text: `Design retried (attempt ${r.attempt}) after ${r.failureKind}: ${r.reason}` })));
+  }
   head.appendChild($("dl", { class: "kv", style: "margin-top:12px" }, [
     $("dt", { text: "Risk" }), $("dd", { text: t.risk }),
     $("dt", { text: "Branch" }), $("dd", { class: "mono", text: t.branch }),

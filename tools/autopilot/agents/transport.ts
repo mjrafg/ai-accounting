@@ -100,13 +100,31 @@ export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
     input: '',
   });
   const raw = (res.stdout ?? '') + (res.stderr ?? '');
-  const rateLimited = res.status !== 0 && looksRateLimited(raw);
   const { rawArtifactPath, rawArtifactHash } = writeRawArtifact(
     task.taskId,
     `${spec.provider}-${task.role}-${started}.raw.txt`,
     raw,
   );
   const parsed = parseStructured(raw, requiredKeysFor(task.schemaName));
+
+  // Quota exhaustion must be detected from the provider's own message, not from
+  // the exit code. The Claude CLI reports transport failures inside a
+  // well-formed envelope and can still exit 0, so gating on `status !== 0`
+  // silently reclassified a real 429 as a parse failure — and a pause is the
+  // one outcome that must never be confused with anything else, because the
+  // alternative is falling back to paid API billing.
+  const rateLimited = looksRateLimited(parsed.providerMessage ?? '') ||
+    (res.status !== 0 && looksRateLimited(raw));
+
+  // A timeout or signal kill leaves status null; that is an execution failure
+  // whatever the partial output looked like.
+  const killed = res.status === null;
+  const failureKind = parsed.ok
+    ? undefined
+    : killed
+      ? 'AGENT_EXECUTION_ERROR'
+      : parsed.failureKind;
+
   return {
     ok: res.status === 0 && parsed.ok,
     structured: parsed.value,
@@ -117,9 +135,13 @@ export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
     usage: extractUsage(raw),
     error: rateLimited
       ? 'subscription quota or rate limit reached'
-      : parsed.ok
-        ? undefined
-        : parsed.error,
+      : killed
+        ? `agent did not run: process terminated without an exit code${res.error ? ` (${res.error.message})` : ''}`
+        : parsed.ok
+          ? undefined
+          : parsed.error,
+    failureKind,
+    providerStatus: parsed.providerStatus,
     simulated: false,
     provider: spec.provider,
     rateLimited,
@@ -177,6 +199,7 @@ export function runFixture(spec: TransportSpec, task: AgentTask): AgentResult {
     // Fixtures never claim token or cost data.
     usage: null,
     error: parsed.ok ? undefined : parsed.error,
+    failureKind: parsed.ok ? undefined : parsed.failureKind,
     simulated: true,
     provider: spec.provider,
   };

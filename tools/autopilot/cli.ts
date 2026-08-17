@@ -24,6 +24,7 @@ import { runSelfTests } from './selftest';
 import { MergeManager } from './merge-manager';
 import { DeployManager } from './deploy-manager';
 import { runMergeIntegrationTests } from './merge-integration-test';
+import { runParserSelfTests } from './parser-selftest';
 import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -35,6 +36,24 @@ function out(s = ''): void {
 function fail(msg: string): never {
   process.stderr.write(`error: ${msg}\n`);
   process.exit(1);
+}
+
+/**
+ * A one-line label for a possibly-long brief: the first non-empty line, trimmed
+ * of list punctuation and capped. The full text is preserved separately as the
+ * description; this only exists so the task list is scannable.
+ */
+export function conciseTitle(body: string, max = 120): string {
+  const first = body
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length > 0) ?? '';
+  const cleaned = first.replace(/^[-*#>\s]+/, '').trim();
+  if (cleaned.length <= max) return cleaned;
+  // Cut on a word boundary rather than mid-word.
+  const cut = cleaned.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
 }
 
 function parseRisk(argv: string[]): Risk {
@@ -130,12 +149,21 @@ async function main(): Promise<number> {
       return cmdDoctor();
 
     case 'task': {
-      if (argv[1] !== 'create') fail('usage: ai task create --risk <low|medium|high> "title"');
+      if (argv[1] !== 'create') fail('usage: ai task create --risk <low|medium|high> [--description <text>] "title"');
       const risk = parseRisk(argv);
-      const title = argv.filter((a, i) => i > 1 && a !== '--risk' && a !== risk).join(' ').trim();
-      if (!title) fail('a task title is required');
+      // --description carries the full multi-line brief; the positional text is
+      // the title. When only one is given the title is derived from it, so the
+      // task list stays readable without discarding anything the operator wrote.
+      const di = argv.indexOf('--description');
+      const description = di >= 0 ? String(argv[di + 1] ?? '') : '';
+      const positional = argv
+        .filter((a, i) => i > 1 && a !== '--risk' && a !== risk && a !== '--description' && a !== description)
+        .join(' ')
+        .trim();
+      const body = description || positional;
+      if (!body) fail('a task title or description is required');
       const orch = new Orchestrator(defaultDeps(REPO_ROOT, policy));
-      const rec = orch.createTask(title, risk);
+      const rec = orch.createTask(positional || conciseTitle(body), risk, body);
       out(`created ${rec.taskId} (risk=${rec.risk}, branch=${rec.branch}, auto-merge=${rec.autoMerge})`);
       return 0;
     }
@@ -149,6 +177,25 @@ async function main(): Promise<number> {
       const state = await orch.run(taskId);
       const rec = tasks.deriveTask(taskId)!;
       tasks.writeCache(rec);
+      out(`${taskId} finished in state ${state}`);
+      return state === 'READY_TO_MERGE' || state === 'MERGED' ? 0 : state === 'ESCALATED' ? 2 : 1;
+    }
+
+    case 'retry': {
+      const taskId = argv[1];
+      if (!taskId) fail('usage: ai retry TASK-XXXX --owner <name> [--reason <text>]');
+      const oi = argv.indexOf('--owner');
+      const owner = oi >= 0 ? String(argv[oi + 1]) : '';
+      if (!owner) fail('--owner is required: the authorisation is recorded immutably');
+      const ri = argv.indexOf('--reason');
+      const reason = ri >= 0 ? String(argv[ri + 1]) : 'operator retry after escalation';
+      const orch = new Orchestrator(defaultDeps(REPO_ROOT, policy));
+      const rec = orch.authorizeRetry(taskId, owner, reason);
+      if (!rec) fail(`unknown task ${taskId}`);
+      out(`${taskId} re-entering at ${rec!.state} (authorized by ${owner})`);
+      const state = await orch.run(taskId);
+      const after = tasks.deriveTask(taskId)!;
+      tasks.writeCache(after);
       out(`${taskId} finished in state ${state}`);
       return state === 'READY_TO_MERGE' || state === 'MERGED' ? 0 : state === 'ESCALATED' ? 2 : 1;
     }
@@ -250,6 +297,10 @@ async function main(): Promise<number> {
     case 'selftest':
       return await runSelfTests(REPO_ROOT);
 
+    case 'parser-selftest':
+      // Envelope/extraction tests built from real recorded provider output.
+      return runParserSelfTests();
+
     case 'merge-selftest':
       // Exercises the merge workflow end to end against a throwaway repository.
       // Never touches this one.
@@ -262,6 +313,7 @@ async function main(): Promise<number> {
       out('  task create --risk <low|medium|high> "…" create a task (default risk: high)');
       out('  run TASK-XXXX                            run a task to a terminal state');
       out('  resume TASK-XXXX                         continue a task after a crash');
+      out('  retry TASK-XXXX --owner <name>           re-run an ESCALATED task from design');
       out('  status TASK-XXXX                         derived task state');
       out('  report TASK-XXXX                         rebuild the markdown report');
       out('  validate TASK-XXXX                       verify log integrity + report determinism');
@@ -273,6 +325,7 @@ async function main(): Promise<number> {
       out('  backfill stage0                          reconstruct Stage 0 history');
       out('  selftest                                 run the autopilot self-tests');
       out('  merge-selftest                           merge workflow test on a disposable repo');
+      out('  parser-selftest                          provider envelope + extraction tests');
       return cmd ? 1 : 0;
   }
 }

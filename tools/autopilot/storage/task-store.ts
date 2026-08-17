@@ -44,6 +44,7 @@ export class TaskStore {
     const rec: TaskRecord = {
       taskId,
       title: String(p.title ?? ''),
+      description: String(p.description ?? p.title ?? ''),
       risk: (p.risk ?? 'high') as Risk,
       state: 'NEW',
       branch: String(p.branch ?? ''),

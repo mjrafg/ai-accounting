@@ -76,7 +76,7 @@ function designPrompt(repoRoot: string, task: TaskRecord): string {
   return `${roleDoc(repoRoot, 'claude-advisor')}
 
 TASK ${task.taskId} (risk=${task.risk})
-${task.title}
+${task.description || task.title}
 
 Return ONLY a JSON object with keys:
 taskId, risk, scopeAllowlist, outOfScope, invariants, falsifiablePredictions,
@@ -88,7 +88,7 @@ function designReviewPrompt(repoRoot: string, task: TaskRecord, design: Design):
   return `${roleDoc(repoRoot, 'codex-reviewer')}
 
 Independently review this DESIGN before any code is written.
-TASK ${task.taskId} (risk=${task.risk}): ${task.title}
+TASK ${task.taskId} (risk=${task.risk}): ${task.description || task.title}
 
 DESIGN:
 ${JSON.stringify(design, null, 2)}
@@ -119,7 +119,7 @@ Return ONLY JSON: { "adjudications": [ { "findingId", "verdict", "reasoning",
 function implementPrompt(repoRoot: string, task: TaskRecord, design: Design, fixes?: AdjudicationResult[]): string {
   return `${roleDoc(repoRoot, 'claude-code-builder')}
 
-TASK ${task.taskId} (risk=${task.risk}): ${task.title}
+TASK ${task.taskId} (risk=${task.risk}): ${task.description || task.title}
 BRANCH: ${task.branch}
 
 FINALIZED DESIGN (authoritative — do not renegotiate it):
@@ -209,7 +209,7 @@ export class Orchestrator {
     return 'PAUSED_RATE_LIMIT';
   }
 
-  createTask(title: string, risk: Risk): TaskRecord {
+  createTask(title: string, risk: Risk, description = ''): TaskRecord {
     const taskId = this.d.tasks.nextTaskId();
     const branch = `ai/${taskId.toLowerCase()}`;
     this.d.events.append({
@@ -218,6 +218,9 @@ export class Orchestrator {
       actor: 'human',
       payload: {
         title,
+        // Full operator brief, preserved verbatim including line breaks. The
+        // title is only a label; agents are given the description.
+        description: description || title,
         risk,
         branch,
         // V1 never auto-merges; HIGH risk additionally stops at READY_TO_MERGE.
@@ -229,6 +232,41 @@ export class Orchestrator {
     const rec = this.d.tasks.deriveTask(taskId)!;
     this.d.tasks.writeCache(rec);
     return rec;
+  }
+
+  /**
+   * Operator-authorised retry of an escalated task, from the design phase.
+   *
+   * Used when the escalation cause was operational rather than a judgement the
+   * pipeline made — an expired token, a since-fixed adapter bug. The original
+   * task, brief and history are kept; the authorisation is recorded before
+   * anything re-runs, and every gate runs again from DESIGNING.
+   */
+  authorizeRetry(taskId: string, owner: string, reason: string): TaskRecord | null {
+    const rec = this.d.tasks.deriveTask(taskId);
+    if (!rec) return null;
+    if (rec.state !== 'ESCALATED') {
+      throw new Error(`task ${taskId} is ${rec.state}, not ESCALATED; nothing to retry`);
+    }
+    const priorEscalations = this.d.tasks
+      .byType(taskId, 'ESCALATION')
+      .map((e) => String((e.payload as any).reason));
+    this.d.events.append({
+      taskId,
+      type: 'RETRY_AUTHORIZED',
+      actor: 'human',
+      payload: {
+        authorizedBy: owner,
+        reason,
+        retryingFrom: 'ESCALATED',
+        reenteringAt: 'DESIGNING',
+        priorEscalations,
+      },
+    });
+    this.transition(taskId, 'ESCALATED', 'DESIGNING');
+    const updated = this.d.tasks.deriveTask(taskId)!;
+    this.d.tasks.writeCache(updated);
+    return updated;
   }
 
   /** Runs the task to a terminal state. Safe to call again after a crash. */
@@ -274,21 +312,68 @@ export class Orchestrator {
     );
 
     // ---- DESIGN -----------------------------------------------------------
-    if (rec.state === 'NEW') {
-      this.transition(taskId, rec.state, 'DESIGNING');
+    // Also runs when the task is already DESIGNING but has no design recorded:
+    // a crash (or an operator retry after an escalation) must re-run the phase
+    // rather than fall through to "no design available".
+    if (rec.state === 'NEW' || (rec.state === 'DESIGNING' && !this.currentDesign(taskId))) {
+      if (rec.state === 'NEW') this.transition(taskId, rec.state, 'DESIGNING');
       this.d.git.createBranch(rec.branch);
 
-      const res = await this.d.advisor.run({
-        taskId,
-        role: 'design',
-        prompt: designPrompt(this.d.repoRoot, rec),
-        schemaName: 'design',
-        cwd: this.d.repoRoot,
-        timeoutMs: 20 * 60 * 1000,
-      });
+      const runDesign = (extra?: string) =>
+        this.d.advisor.run({
+          taskId,
+          role: 'design',
+          prompt: designPrompt(this.d.repoRoot, rec) + (extra ?? ''),
+          schemaName: 'design',
+          cwd: this.d.repoRoot,
+          timeoutMs: 20 * 60 * 1000,
+        });
+
+      let res = await runDesign();
       if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGNING', res.provider);
+
+      // Exactly one retry, and only for failures a retry can plausibly fix.
+      // A parse or schema failure gets an explicit structured-output reminder; an
+      // execution failure (expired credentials, a transient API error) gets a
+      // plain second attempt, because appending instructions to a request that
+      // never reached a model is pointless. Never more than one.
+      if (!res.ok) {
+        const retryable =
+          res.failureKind === 'ADAPTER_PARSE_ERROR' ||
+          res.failureKind === 'AGENT_SCHEMA_ERROR' ||
+          res.failureKind === 'AGENT_EXECUTION_ERROR';
+        if (retryable) {
+          this.d.events.append({
+            taskId,
+            type: 'DESIGN_RETRY',
+            actor: 'orchestrator',
+            payload: {
+              attempt: 2,
+              failureKind: res.failureKind ?? 'UNKNOWN',
+              reason: res.error ?? 'no structured output',
+              providerStatus: res.providerStatus ?? null,
+              rawArtifactHash: res.rawArtifactHash,
+            },
+          });
+          const remind =
+            res.failureKind === 'AGENT_EXECUTION_ERROR'
+              ? ''
+              : '\n\nIMPORTANT: your previous reply could not be used. Reply with a single ' +
+                'JSON object and nothing else — no prose before or after, no markdown fence. ' +
+                'It must contain the keys: scopeAllowlist, outOfScope, invariants, requiredTests.';
+          res = await runDesign(remind);
+          if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGNING', res.provider);
+        }
+      }
+
       if (!res.ok || !res.structured) {
-        return this.escalate(taskId, `design phase failed: ${res.error ?? 'no structured output'}`);
+        // The failure class is part of the reason. "no JSON object found" for an
+        // expired OAuth token sent a previous investigation at the parser.
+        const kind = res.failureKind ?? 'ADAPTER_PARSE_ERROR';
+        return this.escalate(
+          taskId,
+          `design phase failed [${kind}]: ${res.error ?? 'no structured output'}`,
+        );
       }
       this.recordAgent(taskId, 'DESIGN_DECISION', 'claude-advisor', res, {
         design: res.structured,

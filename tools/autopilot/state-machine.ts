@@ -32,7 +32,15 @@ const ALLOWED: Record<TaskState, TaskState[]> = {
   ],
   READY_TO_MERGE: ['MERGED', 'ESCALATED'],
   MERGED: [],
-  ESCALATED: [],
+  // One way out of ESCALATED, and only back to the start of the pipeline.
+  //
+  // An escalation whose cause was operational — expired credentials, a fixed
+  // adapter bug — should not force a brand-new task, because that discards the
+  // original brief and the audit trail of what went wrong. The retry is an
+  // explicit operator action (`ai retry`), records RETRY_AUTHORIZED naming who
+  // authorised it, and re-enters at DESIGNING so every gate runs again. There is
+  // deliberately no edge that resumes mid-pipeline.
+  ESCALATED: ['DESIGNING'],
   FAILED: [],
   CANCELLED: [],
 };
