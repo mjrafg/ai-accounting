@@ -6,7 +6,7 @@ This records what was validated in the Autopilot V2 control plane before it was 
 
 - V2 is a dependency-free `node:http` server (`tools/autopilot-v2/server.ts`) serving a small JSON API plus an SSE stream, bound to `AI_BIND_HOST`:`AI_V2_PORT` (default `172.17.0.1:8788`) rather than a public interface.
 - Access is a session cookie, with TOTP (RFC 6238) MFA required on sensitive approvals — merge, deploy, human decisions — once enrolled; per-endpoint rate limits cover login, MFA, writes, merge and deploy.
-- The API exposes a fixed verb set with no shell passthrough, and agent output is redacted before it is persisted and before it reaches the wire.
+- The API exposes a fixed verb set with no shell passthrough, and agent output is redacted before it reaches the stream log, the per-agent transcripts or the wire — the one exception being the raw debug artifacts described below, which stay `0600` on disk and are never served.
 - Billing is `SUBSCRIPTION_CLI_ONLY`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are stripped from agent child environments, and a task escalates if paid keys are present.
 
 ## Isolation model
