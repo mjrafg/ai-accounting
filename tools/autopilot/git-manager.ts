@@ -103,9 +103,15 @@ export class GitManager {
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean);
-    const working = this.git(['status', '--porcelain'])
+    // --untracked-files=all: without it git collapses a new directory to
+    // "path/dir/", and the scope report names a directory instead of the file
+    // that was actually added. It still blocks either way, but an operator
+    // reading POLICY_BLOCK should see the file.
+    const working = this.git(['status', '--porcelain', '--untracked-files=all'])
       .split('\n')
       .map((l) => l.slice(3).trim())
+      // Renames report "old -> new"; the new path is what changed.
+      .map((l) => (l.includes(' -> ') ? l.split(' -> ')[1].trim() : l))
       .filter(Boolean);
     return Array.from(new Set([...committed, ...working]))
       .filter((f) => !f.startsWith('.ai/'))

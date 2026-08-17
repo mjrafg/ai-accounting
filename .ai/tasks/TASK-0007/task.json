@@ -3,10 +3,10 @@
   "title": "Review and fix the attachment mime-types runtime bug from branch\\nfix/attachments-mime-default-import.\\n\\nThe existing candidate commit is:\\n59f8f2554\\n\\nDo not trust the existing fix blindly.\\n\\nIndependently review it with Claude and Codex, run the relevant tests and\\naccounting safety gates, and if it is correct bring the task to\\nREADY_TO_MERGE.\\n\\nDo not merge or deploy automatically.",
   "description": "Review and fix the attachment mime-types runtime bug from branch\\nfix/attachments-mime-default-import.\\n\\nThe existing candidate commit is:\\n59f8f2554\\n\\nDo not trust the existing fix blindly.\\n\\nIndependently review it with Claude and Codex, run the relevant tests and\\naccounting safety gates, and if it is correct bring the task to\\nREADY_TO_MERGE.\\n\\nDo not merge or deploy automatically.",
   "risk": "high",
-  "state": "ESCALATED",
+  "state": "DESIGNING",
   "branch": "ai/task-0007",
   "createdAt": "2026-08-17T12:30:48.748Z",
-  "updatedAt": "2026-08-17T16:15:15.949Z",
+  "updatedAt": "2026-08-17T16:17:42.169Z",
   "reviewRounds": 0,
   "autoMerge": false,
   "allowlist": [

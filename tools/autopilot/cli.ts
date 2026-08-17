@@ -25,6 +25,7 @@ import { MergeManager } from './merge-manager';
 import { DeployManager } from './deploy-manager';
 import { runMergeIntegrationTests } from './merge-integration-test';
 import { runParserSelfTests } from './parser-selftest';
+import { runIsolationSelfTests } from './isolation-selftest';
 import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -301,6 +302,11 @@ async function main(): Promise<number> {
       // Envelope/extraction tests built from real recorded provider output.
       return runParserSelfTests();
 
+    case 'isolation-selftest':
+      // Proves control-plane edits cannot enter a task's change set, and that a
+      // forbidden edit inside the task worktree is still blocked.
+      return runIsolationSelfTests();
+
     case 'merge-selftest':
       // Exercises the merge workflow end to end against a throwaway repository.
       // Never touches this one.
@@ -326,6 +332,7 @@ async function main(): Promise<number> {
       out('  selftest                                 run the autopilot self-tests');
       out('  merge-selftest                           merge workflow test on a disposable repo');
       out('  parser-selftest                          provider envelope + extraction tests');
+      out('  isolation-selftest                       control-plane / task worktree isolation');
       return cmd ? 1 : 0;
   }
 }

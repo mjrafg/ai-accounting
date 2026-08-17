@@ -15,6 +15,7 @@ import { PolicyEngine, DEFAULT_POLICY } from './policy-engine';
 import { buildReport } from './report';
 import { backfillStage0 } from './backfill-stage0';
 import { GitManager } from './git-manager';
+import { WorktreeManager } from './worktree-manager';
 import { Orchestrator, OrchestratorDeps } from './orchestrator';
 import { AgentAdapter, AgentResult, AgentTask, TestOutcome } from './types';
 import { AcceptanceRunner } from './acceptance-runner';
@@ -204,6 +205,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
         tasks,
         policy,
         git: new GitManager(repo, policy),
+        worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+        accountingBaseRef: 'HEAD',
         advisor: stubAdapter('claude-advisor', 'anthropic', { design: { scopeAllowlist: [], outOfScope: [], invariants: [], requiredTests: [] } }),
         builder: stubAdapter('claude-code', 'anthropic', {}),
         reviewer: stubAdapter('codex', 'openai', {}, { available: false, reason: 'codex binary not installed' }),
@@ -302,6 +305,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
         tasks,
         policy,
         git: new GitManager(repo, policy),
+        worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+        accountingBaseRef: 'HEAD',
         advisor: stubAdapter('claude-advisor', 'anthropic', { design, adjudication: { adjudications: [] } }),
         builder: stubAdapter('claude-code', 'anthropic', { implement: { status: 'IMPLEMENTED', filesChanged: [] } }),
         reviewer: stubAdapter('codex', 'openai', {
@@ -362,6 +367,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
         tasks,
         policy,
         git: new GitManager(repo, policy),
+        worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+        accountingBaseRef: 'HEAD',
         acceptanceFactory: stubAcceptance,
         advisor: stubAdapter('claude-advisor', 'anthropic', { design, adjudication: { adjudications: [] } }),
         builder: stubAdapter('claude-code', 'anthropic', {
@@ -444,6 +451,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
       const deps: OrchestratorDeps = {
         repoRoot: repo, events, tasks, policy,
         git: new GitManager(repo, policy),
+        worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+        accountingBaseRef: 'HEAD',
         acceptanceFactory: stubAcceptance,
         advisor: stubAdapter('claude-advisor', 'anthropic', {
           design,
@@ -500,6 +509,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
       const deps: OrchestratorDeps = {
         repoRoot: repo, events, tasks, policy,
         git: new GitManager(repo, policy),
+        worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+        accountingBaseRef: 'HEAD',
         advisor: rateLimited,
         builder: stubAdapter('claude-code', 'anthropic', {}),
         reviewer: stubAdapter('codex', 'openai', {}),
@@ -533,6 +544,8 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
         const deps: OrchestratorDeps = {
           repoRoot: repo, events, tasks, policy,
           git: new GitManager(repo, policy),
+          worktrees: new WorktreeManager(repo, fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-wt-'))),
+          accountingBaseRef: 'HEAD',
           advisor: stubAdapter('claude-advisor', 'anthropic', {}),
           builder: stubAdapter('claude-code', 'anthropic', {}),
           reviewer: stubAdapter('codex', 'openai', {}),

@@ -29,6 +29,7 @@ import { EventStore } from './storage/event-store';
 import { TaskStore } from './storage/task-store';
 import { PolicyEngine } from './policy-engine';
 import { GitManager } from './git-manager';
+import { WorktreeManager } from './worktree-manager';
 import { AcceptanceRunner } from './acceptance-runner';
 import { assertTransition, isTerminal } from './state-machine';
 import { ClaudeAdvisorAdapter } from './agents/claude-advisor';
@@ -41,7 +42,12 @@ export interface OrchestratorDeps {
   events: EventStore;
   tasks: TaskStore;
   policy: PolicyEngine;
+  /** Control-plane git. Used only to resolve the accounting base. */
   git: GitManager;
+  /** Creates and locates the per-task worktree the builder is confined to. */
+  worktrees: WorktreeManager;
+  /** Accounting base ref new tasks are cut from. Never the control-plane branch. */
+  accountingBaseRef?: string;
   advisor: AgentAdapter;
   builder: AgentAdapter;
   reviewer: AgentAdapter;
@@ -58,6 +64,7 @@ export function defaultDeps(repoRoot: string, policy: PolicyEngine): Orchestrato
     tasks: new TaskStore(events),
     policy,
     git: new GitManager(repoRoot, policy),
+    worktrees: new WorktreeManager(repoRoot),
     advisor: new ClaudeAdvisorAdapter(repoRoot),
     builder: new ClaudeCodeAdapter(repoRoot),
     reviewer: new CodexAdapter(repoRoot),
@@ -231,7 +238,10 @@ export class Orchestrator {
         // V1 never auto-merges; HIGH risk additionally stops at READY_TO_MERGE.
         autoMerge: this.d.policy.autoMergeAllowed(risk),
         allowlist: [],
-        baseRef: this.d.git.head(),
+        // TASK_BASE_SHA. The approved accounting base, resolved once and never
+        // recomputed: a task cut from the control-plane branch inherits
+        // Autopilot development it must never be held responsible for.
+        baseRef: this.d.worktrees.accountingBase(this.d.accountingBaseRef ?? 'origin/main'),
       },
     });
     const rec = this.d.tasks.deriveTask(taskId)!;
@@ -388,39 +398,34 @@ export class Orchestrator {
     //
     // BASE_REF_UPDATED is appended rather than TASK_CREATED being rewritten, so
     // the rebasing is visible in the log instead of silently changing history.
-    // Establish the task branch before any phase runs, not inside the design
-    // block. A retry that already has a design skips that block entirely, so the
-    // branch was never re-established and the baseline was never re-anchored —
-    // which is why the same eleven unrelated files were attributed to the
-    // builder twice.
-    const branchMove = this.d.git.createBranch(rec.branch);
-
-    const baseUpdates = this.d.tasks.byType(taskId, 'BASE_REF_UPDATED');
-    let baseRef = String(
-      baseUpdates.length
-        ? (baseUpdates[baseUpdates.length - 1].payload as any).baseRef
-        : (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
+    // ---- ISOLATION -------------------------------------------------------
+    // Everything this task may touch lives in its own worktree, cut from the
+    // recorded TASK_BASE_SHA. The control-plane checkout this process runs from
+    // is never measured: that is what made eleven Autopilot files look like
+    // builder edits. The boundary is physical — the infrastructure is simply not
+    // in the tree being diffed — not a path filter applied afterwards.
+    const baseRef = String(
+      (this.d.tasks.byType(taskId, 'TASK_CREATED')[0].payload as any).baseRef,
     );
-
-    // Only when the branch actually moved, and only before anything is built —
-    // a branch carrying the builder's commits is never retargeted, so this
-    // cannot silently re-baseline real work out of scope.
-    if (branchMove.retargeted) {
-      const headNow = this.d.git.head();
-      if (headNow !== baseRef) {
-        this.d.events.append({
+    const wt = this.d.worktrees.ensure(taskId, rec.branch, baseRef);
+    if (wt.created) {
+      this.d.events.append({
+        taskId,
+        type: 'TASK_WORKTREE_RECREATED',
+        actor: 'orchestrator',
+        payload: {
           taskId,
-          type: 'BASE_REF_UPDATED',
-          actor: 'orchestrator',
-          payload: {
-            baseRef: headNow,
-            previousBaseRef: baseRef,
-            reason: 'task branch re-anchored onto current HEAD for this attempt',
-          },
-        });
-        baseRef = headNow;
-      }
+          worktreePath: wt.path,
+          branch: wt.branch,
+          newTaskBase: baseRef,
+          reason: 'isolated task worktree created from the recorded task base',
+        },
+      });
     }
+    this.log(`  task worktree: ${wt.path} (base ${baseRef.slice(0, 9)})`);
+
+    // Every task git operation runs here, never in the control-plane checkout.
+    const taskGit = new GitManager(wt.path, this.d.policy);
 
     // ---- DESIGN -----------------------------------------------------------
     // Also runs when the task is already DESIGNING but has no design recorded:
@@ -438,7 +443,7 @@ export class Orchestrator {
           role: 'design',
           prompt: designPrompt(this.d.repoRoot, rec),
           schemaName: 'design',
-          cwd: this.d.repoRoot,
+          cwd: wt.path,
           timeoutMs: 20 * 60 * 1000,
         },
         ['scopeAllowlist', 'outOfScope', 'invariants', 'requiredTests'],
@@ -469,7 +474,7 @@ export class Orchestrator {
         role: 'design-review',
         prompt: designReviewPrompt(this.d.repoRoot, rec, design),
         schemaName: 'design-review',
-        cwd: this.d.repoRoot,
+        cwd: wt.path,
         timeoutMs: 20 * 60 * 1000,
       },
         'verdict,findings'.split(','),
@@ -489,7 +494,9 @@ export class Orchestrator {
       const blockers = findings.filter((f) => f.severity === 'BLOCKER');
       if (blockers.length > 0) {
         this.transition(taskId, rec.state, 'DESIGN_ADJUDICATION');
-        const adj = await this.adjudicate(taskId, rec, blockers, design);
+        const adj = await this.adjudicate(
+        wt.path,
+        taskId, rec, blockers, design);
         if (adj === null) return this.escalate(taskId, 'design adjudication produced no structured verdict');
 
         const unresolved = adj.filter((a) => a.verdict === 'CONFIRMED' && !a.requiredFix);
@@ -544,7 +551,7 @@ export class Orchestrator {
         role: 'implement',
         prompt: implementPrompt(this.d.repoRoot, rec, design),
         schemaName: 'implementation',
-        cwd: this.d.repoRoot,
+        cwd: wt.path,
         timeoutMs: 60 * 60 * 1000,
       },
         'status,filesChanged'.split(','),
@@ -565,7 +572,7 @@ export class Orchestrator {
         return this.escalate(taskId, `builder returned status ${String(res.structured.status)}`);
       }
 
-      const violations = this.checkChangedFiles(taskId, baseRef, design.scopeAllowlist);
+      const violations = this.checkChangedFiles(taskId, taskGit, baseRef, design.scopeAllowlist);
       if (violations) return violations;
       rec = this.d.tasks.deriveTask(taskId)!;
     }
@@ -602,7 +609,7 @@ export class Orchestrator {
       const reviewState: TaskState = round === 1 ? 'CODEX_REVIEW' : 'RE_REVIEW';
       this.transition(taskId, rec.state, reviewState);
 
-      const diff = this.d.git.diff(baseRef);
+      const diff = taskGit.diff(baseRef);
       const res = await this.runAgentStep(
         taskId,
         'implementation review',
@@ -612,7 +619,7 @@ export class Orchestrator {
         role: round === 1 ? 'review' : 're-review',
         prompt: reviewPrompt(this.d.repoRoot, rec, diff, design),
         schemaName: 'review',
-        cwd: this.d.repoRoot,
+        cwd: wt.path,
         timeoutMs: 30 * 60 * 1000,
       },
         'findings'.split(','),
@@ -658,7 +665,9 @@ export class Orchestrator {
 
       rec = this.d.tasks.deriveTask(taskId)!;
       this.transition(taskId, rec.state, 'ADJUDICATION');
-      const adj = await this.adjudicate(taskId, rec, blockers, design);
+      const adj = await this.adjudicate(
+        wt.path,
+        taskId, rec, blockers, design);
       if (adj === null) return this.escalate(taskId, 'adjudication produced no structured verdict');
 
       const confirmed = adj.filter((a) => a.verdict === 'CONFIRMED' || a.verdict === 'PARTIAL');
@@ -681,7 +690,7 @@ export class Orchestrator {
         role: 'implement',
         prompt: implementPrompt(this.d.repoRoot, rec, design, confirmed),
         schemaName: 'implementation',
-        cwd: this.d.repoRoot,
+        cwd: wt.path,
         timeoutMs: 60 * 60 * 1000,
       },
         'status,filesChanged'.split(','),
@@ -704,7 +713,7 @@ export class Orchestrator {
         });
       }
 
-      const violations = this.checkChangedFiles(taskId, baseRef, design.scopeAllowlist);
+      const violations = this.checkChangedFiles(taskId, taskGit, baseRef, design.scopeAllowlist);
       if (violations) return violations;
 
       rec = this.d.tasks.deriveTask(taskId)!;
@@ -767,7 +776,7 @@ export class Orchestrator {
       actor: 'orchestrator',
       payload: {
         branch: rec.branch,
-        head: this.d.git.head(),
+        head: taskGit.head(),
         autoMerge: false,
         reason:
           rec.risk === 'high'
@@ -853,6 +862,7 @@ export class Orchestrator {
   }
 
   private async adjudicate(
+    cwd: string,
     taskId: string,
     rec: TaskRecord,
     findings: Finding[],
@@ -863,7 +873,7 @@ export class Orchestrator {
       role: 'adjudication',
       prompt: adjudicationPrompt(this.d.repoRoot, rec, findings, design),
       schemaName: 'adjudication',
-      cwd: this.d.repoRoot,
+      cwd,
       timeoutMs: 20 * 60 * 1000,
     });
     if (!res.ok || !res.structured) return null;
@@ -882,8 +892,14 @@ export class Orchestrator {
   }
 
   /** Returns 'ESCALATED' when the change set violates scope or protection. */
-  private checkChangedFiles(taskId: string, baseRef: string, allowlist: string[]): 'ESCALATED' | null {
-    const changed = this.d.git.changedFiles(baseRef);
+  private checkChangedFiles(
+    taskId: string,
+    taskGit: GitManager,
+    baseRef: string,
+    allowlist: string[],
+  ): 'ESCALATED' | null {
+    // Measured in the task worktree only.
+    const changed = taskGit.changedFiles(baseRef);
     const violations = [
       ...this.d.policy.checkScope(changed, allowlist),
       ...this.d.policy.checkProtectedPaths(changed),
