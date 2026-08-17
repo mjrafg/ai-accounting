@@ -1,0 +1,13 @@
+{
+  "taskId": "TASK-0002",
+  "title": "Review the repository and summarize the Stage 0 deferred issues. Do not modify any files.",
+  "risk": "low",
+  "state": "ESCALATED",
+  "branch": "ai/task-0002",
+  "createdAt": "2026-08-17T03:19:11.623Z",
+  "updatedAt": "2026-08-17T03:24:00.218Z",
+  "reviewRounds": 0,
+  "autoMerge": false,
+  "allowlist": [],
+  "lastError": "design review failed: structured output missing required keys: verdict, findings"
+}

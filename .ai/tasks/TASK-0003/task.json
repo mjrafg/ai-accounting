@@ -1,0 +1,13 @@
+{
+  "taskId": "TASK-0003",
+  "title": "Review the repository and summarize the Stage 0 deferred issues. Do not modify any files.",
+  "risk": "low",
+  "state": "ESCALATED",
+  "branch": "ai/task-0003",
+  "createdAt": "2026-08-17T03:25:06.793Z",
+  "updatedAt": "2026-08-17T03:32:03.914Z",
+  "reviewRounds": 0,
+  "autoMerge": false,
+  "allowlist": [],
+  "lastError": "policy blocked the change set (1 violation(s))"
+}

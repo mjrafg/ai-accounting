@@ -95,6 +95,9 @@ export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
     timeout: task.timeoutMs,
     maxBuffer: 256 * 1024 * 1024,
     env: subscriptionEnv(),
+    // Closed stdin: codex otherwise waits for more input after its turn and the
+    // call never returns.
+    input: '',
   });
   const raw = (res.stdout ?? '') + (res.stderr ?? '');
   const rateLimited = res.status !== 0 && looksRateLimited(raw);

@@ -55,10 +55,40 @@ function lastJsonObject(text: string): unknown | null {
 }
 
 /**
+ * Codex `exec --json` emits a JSONL event stream rather than one document, and
+ * the agent's own answer arrives as an escaped string inside
+ * `item.completed -> item.text`. Without unwrapping it, a perfectly valid
+ * review looks like malformed output.
+ */
+function unwrapEventStream(raw: string): string | null {
+  const messages: string[] = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev?.type === 'item.completed' && ev?.item?.type === 'agent_message' && typeof ev.item.text === 'string') {
+      messages.push(ev.item.text);
+    } else if (ev?.type === 'item.completed' && typeof ev?.item?.text === 'string') {
+      messages.push(ev.item.text);
+    }
+  }
+  if (!messages.length) return null;
+  // The last message is the agent's final answer; earlier ones are narration.
+  return messages[messages.length - 1];
+}
+
+/**
  * Unwraps the Claude Code `--output-format json` envelope when present, so
  * callers always see the agent's own payload.
  */
 export function unwrapEnvelope(raw: string): string {
+  const streamed = unwrapEventStream(raw);
+  if (streamed) return streamed;
   const top = tryParse(raw);
   if (top && typeof top === 'object') {
     const o = top as Record<string, unknown>;
@@ -70,6 +100,20 @@ export function unwrapEnvelope(raw: string): string {
 
 /** Provider usage, only when the provider actually reported it. */
 export function extractUsage(raw: string): { inputTokens?: number; outputTokens?: number; costUsd?: number } | null {
+  // Codex reports usage on its turn.completed event.
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const ev = JSON.parse(t);
+      if (ev?.type === 'turn.completed' && ev?.usage) {
+        const u: { inputTokens?: number; outputTokens?: number } = {};
+        if (typeof ev.usage.input_tokens === 'number') u.inputTokens = ev.usage.input_tokens;
+        if (typeof ev.usage.output_tokens === 'number') u.outputTokens = ev.usage.output_tokens;
+        if (Object.keys(u).length) return u;
+      }
+    } catch { /* not an event line */ }
+  }
   const top = tryParse(raw);
   if (!top || typeof top !== 'object') return null;
   const o = top as Record<string, any>;

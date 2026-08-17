@@ -57,7 +57,14 @@ export class GitManager {
     this.git(['checkout', '-b', name]);
   }
 
-  /** Files changed relative to a base ref, plus anything uncommitted. */
+  /**
+   * Files changed relative to a base ref, plus anything uncommitted.
+   *
+   * The autopilot's own state (`.ai/`) is excluded: the orchestrator writes its
+   * event log there on every run, so counting it as task output made each run
+   * trip its own scope check. It is bookkeeping, not something the builder
+   * produced, and it is covered by the append-only integrity check instead.
+   */
   changedFiles(baseRef: string): string[] {
     const committed = this.git(['diff', '--name-only', `${baseRef}...HEAD`])
       .split('\n')
@@ -67,7 +74,9 @@ export class GitManager {
       .split('\n')
       .map((l) => l.slice(3).trim())
       .filter(Boolean);
-    return Array.from(new Set([...committed, ...working])).sort();
+    return Array.from(new Set([...committed, ...working]))
+      .filter((f) => !f.startsWith('.ai/'))
+      .sort();
   }
 
   diff(baseRef: string): string {
