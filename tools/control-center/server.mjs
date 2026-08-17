@@ -462,7 +462,25 @@ function readBody(req) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handle(req, res).catch((err) => {
+    // One bad request must not kill the control plane. Before this guard a
+    // failed write inside the handler crashed the process, and the proxy
+    // reported the dead upstream as a 502 - hiding the real error.
+    process.stderr.write(`request failed: ${req.method} ${req.url}: ${err?.stack ?? err}\n`);
+    if (!res.headersSent) json(res, 500, { error: 'internal error' });
+    else try { res.end(); } catch { /* already gone */ }
+  });
+});
+
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`uncaughtException: ${err?.stack ?? err}\n`);
+});
+process.on('unhandledRejection', (err) => {
+  process.stderr.write(`unhandledRejection: ${err?.stack ?? err}\n`);
+});
+
+async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() ?? req.socket.remoteAddress ?? 'unknown';
@@ -515,12 +533,18 @@ const server = http.createServer(async (req, res) => {
       return json(res, 400, { error: 'password must be at least 12 characters' });
     }
     const salt = crypto.randomBytes(16).toString('hex');
-    fs.writeFileSync(OWNER_FILE, JSON.stringify({
-      username: String(username || 'owner'), salt, hash: hashPassword(password, salt),
-      createdAt: new Date().toISOString(),
-    }), { mode: 0o600 });
-    // The bootstrap path is destroyed, not merely hidden.
-    fs.rmSync(tokenFile, { force: true });
+    try {
+      fs.writeFileSync(OWNER_FILE, JSON.stringify({
+        username: String(username || 'owner'), salt, hash: hashPassword(password, salt),
+        createdAt: new Date().toISOString(),
+      }), { mode: 0o600 });
+    } catch (err) {
+      process.stderr.write(`owner write failed: ${err?.message}\n`);
+      return json(res, 500, { error: 'could not persist the owner account', detail: String(err?.code ?? '') });
+    }
+    // The bootstrap path is destroyed, not merely hidden: a consumed token can
+    // never be replayed, even by someone who saw it.
+    try { fs.rmSync(tokenFile, { force: true }); } catch { /* best effort */ }
     return json(res, 200, { ok: true });
   }
 
@@ -622,7 +646,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   return json(res, 404, { error: 'not found' });
-});
+}
 
 server.listen(PORT, HOST, () => {
   process.stdout.write(`ai-control-center listening on ${HOST}:${PORT} (public ${PUBLIC_URL})\n`);
