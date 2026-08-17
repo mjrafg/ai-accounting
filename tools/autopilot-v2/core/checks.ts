@@ -184,6 +184,16 @@ export function stageMinus1(worktree: string, holder: string): CheckResult {
   try {
     for (const f of listJestJsonTemp()) fs.rmSync(f, { force: true });
     const server = path.join(worktree, 'packages/server');
+    // Stage -1 tenant provisioning boots `node dist/main.js`. The worktree has
+    // no build output, so build it HERE, from the worktree's own source — the
+    // emit under test is then the worktree's, not the control plane's.
+    if (!fs.existsSync(path.join(server, 'dist', 'main.js'))) {
+      const b = run(path.join(server, 'node_modules/.bin/nest'), ['build'], server, 15 * 60_000, toolEnv());
+      if (b.code !== 0) {
+        return { name: 'stage-minus-1', ok: false, durationMs: Date.now() - t0,
+          detail: `worktree server build failed (exit ${b.code}): ${b.out.slice(-300)}` };
+      }
+    }
     const r = run('node', ['test/e2e-runner.mjs'], server, 60 * 60_000, toolEnv());
     const passed = Number(/(\d+)\s+passed/.exec(r.out)?.[1] ?? 0);
     const failed = Number(/(\d+)\s+failed/.exec(r.out)?.[1] ?? 0);
@@ -194,9 +204,11 @@ export function stageMinus1(worktree: string, holder: string): CheckResult {
     const drift = compareSignatures(sig);
 
     const ok = r.code === 0 && regressions === 0 && !reviewRequired && drift.changed.length === 0;
+    const abnormal = passed === 0 && failed === 0 && r.code !== 0;
     return {
       name: 'stage-minus-1', ok, durationMs: Date.now() - t0,
-      detail: `${passed} passed, ${failed} failed, ${regressions} regressions` +
+      detail: (abnormal ? `HARNESS: ${r.out.split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 300)} — ` : '') +
+        `${passed} passed, ${failed} failed, ${regressions} regressions` +
         (drift.changed.length ? `; SIGNATURE DRIFT (REVIEW_REQUIRED): ${drift.changed.join(', ')}` : '') +
         (drift.baselineEstablished ? ' (signature baseline established this run)' : ''),
       data: { passed, failed, regressions, signatureDrift: drift.changed, exitCode: r.code },
