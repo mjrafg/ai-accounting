@@ -200,7 +200,7 @@ export function stageMinus1(worktree: string, holder: string): CheckResult {
     const regressions = Number(/(\d+)\s+regressions?/.exec(r.out)?.[1] ?? (r.code === 0 ? 0 : 1));
     const reviewRequired = /REVIEW_REQUIRED/i.test(r.out);
 
-    const sig = collectFailureSignatures();
+    const sig = collectFailureSignatures(worktree);
     const drift = compareSignatures(sig);
 
     const ok = r.code === 0 && regressions === 0 && !reviewRequired && drift.changed.length === 0;
@@ -223,17 +223,21 @@ function listJestJsonTemp(): string[] {
   catch { return []; }
 }
 
-/** Normalized per-test failure signatures from the runner's jest JSON output. */
-export function collectFailureSignatures(): Record<string, string> {
+/**
+ * Per-test failure signatures from the runner's CANONICAL results file
+ * (test/e2e-results.json): stable identity (spec::test name), signature over
+ * classification + evidence + bootstrap class. The runner's per-spec jest JSON
+ * temp files are deleted by the runner itself, so they cannot be the source.
+ */
+export function collectFailureSignatures(worktree: string): Record<string, string> {
   const sig: Record<string, string> = {};
-  for (const file of listJestJsonTemp()) {
-    let j: any; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
-    for (const tr of j.testResults ?? []) {
-      for (const a of tr.testResults ?? tr.assertionResults ?? []) {
-        if (a.status !== 'failed') continue;
-        const key = `${path.basename(tr.testFilePath ?? file)}::${a.fullName ?? a.title}`;
-        sig[key] = normalizeFailure((a.failureMessages ?? []).join('\n'));
-      }
+  const p = path.join(worktree, 'packages/server/test/e2e-results.json');
+  let j: any;
+  try { j = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return sig; }
+  for (const [spec, v] of Object.entries<any>(j.specs ?? {})) {
+    for (const f of v.failed ?? []) {
+      sig[`${spec}::${f.name}`] = normalizeFailure(
+        `${f.classification ?? ''}|${f.evidence ?? ''}|${v.bootstrapErrorClass ?? ''}`);
     }
   }
   return sig;
