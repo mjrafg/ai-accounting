@@ -56,6 +56,7 @@ export type EventType =
   | 'MERGED'
   | 'DEPLOYMENT_APPROVED'
   | 'DEPLOYED'
+  | 'DEPLOYMENT_FAILED'
   | 'BACKFILL_GAP'
   | 'EVIDENCE_CONFLICT'
   | 'POLICY_BLOCK';

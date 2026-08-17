@@ -121,14 +121,70 @@ async function api(path, opts = {}) {
 }
 
 const STATE_CLASS = s =>
-  ["READY_TO_MERGE","MERGED"].includes(s) ? "s-ok" :
+  ["READY_TO_MERGE","MERGED","DEPLOYED"].includes(s) ? "s-ok" :
   ["ESCALATED","FAILED"].includes(s) ? "s-bad" :
   s === "PAUSED_RATE_LIMIT" ? "s-warn" :
   ["NEW","CANCELLED"].includes(s) ? "s-idle" : "s-run";
+const TERMINAL = ["READY_TO_MERGE","MERGED","DEPLOYED","ESCALATED","FAILED","CANCELLED"];
 const fmt = t => { try { return new Date(t).toLocaleString(); } catch { return String(t); } };
 const hhmm = t => { try { return new Date(t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); } catch { return ""; } };
 
 // ---- views ---------------------------------------------------------------
+
+const short = s => (s ? String(s).slice(0, 9) : "");
+
+/**
+ * An approval that cannot be given blind.
+ *
+ * The action button does not exist until its preflight has been fetched and
+ * come back ok. When the preflight refuses, the reasons are what the owner
+ * sees — there is no button to press past them.
+ */
+function gate({ title, lead, fetchPath, actionPath, actionLabel, rows, slow }) {
+  const c = $("div", { class: "card" }, [$("h2", { text: title }), $("p", { class: "sub", text: lead })]);
+  const body = $("div", { text: "Running preflight…", class: "m" });
+  const foot = $("div", { class: "row", style: "margin-top:12px" });
+  c.appendChild(body); c.appendChild(foot);
+
+  const load = async () => {
+    body.textContent = "Running preflight…"; foot.textContent = "";
+    let p;
+    try { p = await api(fetchPath); }
+    catch (e) { body.textContent = "Preflight failed: " + e.message; return; }
+
+    body.textContent = "";
+    const dl = $("dl", { class: "kv" });
+    for (const [k, v] of rows(p)) { dl.appendChild($("dt", { text: k })); dl.appendChild($("dd", { class: "mono", text: String(v ?? "—") })); }
+    body.appendChild(dl);
+
+    if (p.ok) {
+      body.appendChild($("div", { class: "note", style: "margin-top:10px", text: "Preflight passed. This is irreversible from here." }));
+      const btn = $("button", { class: "btn", text: actionLabel });
+      btn.onclick = async () => {
+        if (!confirm(actionLabel + "?\n\nThis is not a dry run.")) return;
+        btn.disabled = true; btn.textContent = slow ? "Deploying… this takes several minutes" : "Working…";
+        try {
+          const r = await api(actionPath, { method: "POST", body: "{}" });
+          alert(r.detail || "done");
+        } catch (e) { alert(e.message); }
+        btn.disabled = false; btn.textContent = actionLabel;
+        refresh();
+      };
+      foot.appendChild(btn);
+    } else {
+      const bad = $("div", { style: "margin-top:10px" });
+      bad.appendChild($("h3", { text: "Blocked" }));
+      const ul = $("ul", { class: "vlist no" });
+      (p.problems || ["preflight did not pass"]).forEach(x => ul.appendChild($("li", { text: x })));
+      bad.appendChild(ul);
+      body.appendChild(bad);
+    }
+    const again = $("button", { class: "btn sec", text: "Re-run preflight" });
+    again.onclick = load; foot.appendChild(again);
+  };
+  load();
+  return c;
+}
 
 function taskTile(t) {
   return $("div", { class: "tile", onclick: () => go("task", t.taskId) }, [
@@ -173,10 +229,12 @@ function viewHome() {
   m.appendChild(composer);
 
   const groups = [
-    ["Running", t => !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state)],
+    ["Running", t => !TERMINAL.includes(t.state)],
     ["Ready to merge", t => t.state === "READY_TO_MERGE"],
+    ["Merged — awaiting deployment", t => t.state === "MERGED"],
     ["Escalated", t => t.state === "ESCALATED" || t.state === "FAILED"],
-    ["Recently completed", t => t.state === "MERGED" || t.state === "CANCELLED"],
+    ["Deployed to production", t => t.state === "DEPLOYED"],
+    ["Cancelled", t => t.state === "CANCELLED"],
   ];
   for (const [label, pred] of groups) {
     const items = state.tasks.filter(pred);
@@ -207,14 +265,14 @@ function viewTasks() {
   const m = $("div");
   const c = $("div", { class: "card" }, [$("h1", { text: "Tasks" })]);
   const filt = $("select");
-  ["all","running","READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED","PAUSED_RATE_LIMIT"]
+  ["all","running","READY_TO_MERGE","MERGED","DEPLOYED","ESCALATED","FAILED","CANCELLED","PAUSED_RATE_LIMIT"]
     .forEach(v => filt.appendChild($("option", { value: v, text: v === "all" ? "All statuses" : v.replace(/_/g," ").toLowerCase() })));
   const list = $("div");
   const draw = () => {
     list.textContent = "";
     const v = filt.value;
     const items = state.tasks.filter(t => v === "all" ? true
-      : v === "running" ? !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state)
+      : v === "running" ? !TERMINAL.includes(t.state)
       : t.state === v);
     if (!items.length) list.appendChild($("div", { class: "empty", text: "Nothing matches this filter." }));
     items.forEach(t => list.appendChild(taskTile(t)));
@@ -232,6 +290,7 @@ function viewTask(t) {
   const head = $("div", { class: "card" });
   head.appendChild($("div", { class: "row" }, [
     $("h1", { text: t.taskId + " · " + t.title, style: "flex:1" }),
+    $("span", { class: "pill " + (t.provenance === "LIVE" ? "s-ok" : t.provenance === "SIMULATED" ? "s-bad" : "s-warn"), text: t.provenance }),
     $("span", { class: "pill " + STATE_CLASS(t.state), text: t.state.replace(/_/g, " ") }),
   ]));
   head.appendChild($("div", { class: "bar" }, [$("i", { style: "width:" + t.progress + "%" })]));
@@ -256,12 +315,73 @@ function viewTask(t) {
     };
     return b;
   };
-  const active = !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state);
+  const active = !TERMINAL.includes(t.state);
   if (active) { acts.appendChild(act("Pause", "pause")); acts.appendChild(act("Cancel", "cancel")); }
-  else acts.appendChild(act("Resume", "resume"));
-  if (t.state === "READY_TO_MERGE") acts.appendChild(act("Approve merge", "approve-merge", ""));
+  else if (!["MERGED", "DEPLOYED"].includes(t.state)) acts.appendChild(act("Resume", "resume"));
   head.appendChild(acts);
   m.appendChild(head);
+
+  // Merge and deploy are two separate approvals, each behind its own preflight.
+  // Neither button is offered until its preflight has actually been fetched and
+  // passed, so the owner never approves something they have not been shown.
+  if (t.state === "READY_TO_MERGE") m.appendChild(gate({
+    title: "Merge to main",
+    lead: "Everything is re-verified now, not as of when the review ran.",
+    fetchPath: "/api/tasks/" + t.taskId + "/merge-preflight",
+    actionPath: "/api/tasks/" + t.taskId + "/approve-merge",
+    actionLabel: "Approve merge",
+    rows: p => [
+      ["Source branch", p.sourceBranch],
+      ["Reviewed HEAD", short(p.reviewedHead)],
+      ["Current HEAD", short(p.currentHead)],
+      ["Target", p.targetBranch],
+      ["main", short(p.mainSha)],
+      ["origin/main", short(p.originMainSha)],
+      ["Commits", (p.commits || []).length],
+      ["Files changed", (p.changedFiles || []).length],
+      ["Diff", p.diffStat || "—"],
+    ],
+  }));
+
+  if (t.state === "MERGED") m.appendChild(gate({
+    title: "Deploy to production",
+    lead: "Deploys origin/main and nothing else. A merged task does not ship itself — this is a second, separate approval.",
+    fetchPath: "/api/tasks/" + t.taskId + "/deploy-preflight",
+    actionPath: "/api/tasks/" + t.taskId + "/deploy",
+    actionLabel: "Deploy to production",
+    slow: true,
+    rows: p => [
+      ["Candidate SHA", short(p.candidateSha)],
+      ["Current production SHA", short(p.currentSha) || "none deployed"],
+      ["origin/main", short(p.originMainSha)],
+      ["Task merged SHA", short(p.taskMergedSha) || "—"],
+      ["Task state", p.taskState || "—"],
+      ["Commits ahead of production", p.commitsAhead],
+      ["Migrations changed", p.migrationsChanged === 0 ? "no" : p.migrationsChanged + " file(s)"],
+      ["Current health", p.healthOk ? "all checks passing" : "FAILING"],
+      ["Backup", p.backupReady ? p.backupAgeHours + "h old — " + p.backupPath : "NOT READY"],
+      ["Rollback target", short(p.rollbackTarget) || "none"],
+    ],
+  }));
+
+  if (t.deployed) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Deployed to production" })]);
+    c.appendChild($("dl", { class: "kv" }, [
+      $("dt", { text: "Deployed SHA" }), $("dd", { class: "mono", text: short(t.deployed.deployedSha) }),
+      $("dt", { text: "Previous SHA" }), $("dd", { class: "mono", text: short(t.deployed.previousProductionSha) || "none" }),
+      $("dt", { text: "Approved by" }), $("dd", { text: t.deployed.approvedBy || "—" }),
+      $("dt", { text: "At" }), $("dd", { text: fmt(t.deployed.deployedAt) }),
+      $("dt", { text: "Health" }), $("dd", { text: t.deployed.healthResult || "—" }),
+      $("dt", { text: "Backup" }), $("dd", { text: t.deployed.backupState || "—" }),
+    ]));
+    m.appendChild(c);
+  }
+  if (t.deployFailed && t.deployFailed.length) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Failed deployments" })]);
+    t.deployFailed.forEach(f => c.appendChild($("div", { class: "note", style: "margin-bottom:8px",
+      text: `${short(f.attemptedSha)}: ${f.detail} — rolled back to ${short(f.rolledBackTo) || "nothing"}; migrations reversed: ${f.migrationsReversed ? "yes" : "no"}` })));
+    m.appendChild(c);
+  }
 
   if (t.escalation.length) {
     const c = $("div", { class: "card" }, [$("h2", { text: "Escalated — needs a human decision" })]);
@@ -343,10 +463,25 @@ function viewPerformance() {
   const k = state.metrics;
   if (!k) { m.appendChild($("div", { class: "card" }, [$("div", { class: "empty", text: "No metrics yet." })])); return m; }
   m.appendChild($("div", { class: "card" }, [
-    $("h1", { text: "AI team performance" }),
-    $("div", { class: "note", text: `SAMPLE SIZE: ${k.sampleSize} TASK(S)` + (k.historicalOnly ? " — historical/reconstructed only." : ".") +
-      " These counters describe the tasks recorded so far and are not a measure of long-term agent accuracy. This is deliberately not a leaderboard." }),
+    $("h1", { text: "Observatory" }),
+    $("div", { class: "note", text:
+      `SAMPLE SIZE: ${k.sampleSize} task(s) — ${k.liveSampleSize} live, ${k.reconstructedSampleSize} historical/reconstructed` +
+      (k.simulatedSampleSize ? `, ${k.simulatedSampleSize} simulated` : "") + ". " +
+      "Counted from the immutable event logs, nowhere else. Live and reconstructed runs are listed separately rather than averaged: reconstructed history was rebuilt after the fact and is weaker evidence than an observed run. No percentage is shown at this sample size — it would invent precision the data does not have." }),
   ]));
+  const prov = $("div", { class: "card" }, [$("h2", { text: "Provenance by task" })]);
+  const pt = $("table");
+  pt.appendChild($("tr", {}, [["Task","Title","Evidence","Events","Findings","Adjudications"].map(h => $("th", { text: h }))].flat()));
+  (k.tasks || []).forEach(t => pt.appendChild($("tr", {}, [
+    $("td", { class: "mono", text: t.taskId }),
+    $("td", { text: t.title }),
+    $("td", {}, [$("span", { class: "pill " + (t.provenance === "LIVE" ? "s-ok" : t.provenance === "SIMULATED" ? "s-bad" : "s-warn"), text: t.provenance })]),
+    $("td", { text: String(t.events) }),
+    $("td", { text: String(t.findings) }),
+    $("td", { text: String(t.adjudications) }),
+  ])));
+  prov.appendChild($("div", { class: "scroll" }, [pt]));
+  m.appendChild(prov);
   const tbl = (title, rows) => {
     const c = $("div", { class: "card" }, [$("h2", { text: title })]);
     const t = $("table");
@@ -386,6 +521,88 @@ function viewPerformance() {
     ["Policy blocks", k.system.policyBlocks], ["Rate-limit pauses", k.system.pauses],
     ["Known evidence gaps", k.system.gaps], ["Deferred items", k.system.deferred],
   ]));
+  return m;
+}
+
+function viewProduction() {
+  const m = $("div");
+  const s = state.sys;
+  const rel = (s && s.release) || {};
+  m.appendChild($("div", { class: "card" }, [
+    $("h1", { text: "Production" }),
+    $("p", { class: "sub", text: "The accounting application at " + (s ? s.accountingUrl : "acc.agent24.io") + ". Deployed from origin/main only." }),
+    $("dl", { class: "kv" }, [
+      $("dt", { text: "Deployed SHA" }), $("dd", { class: "mono", text: rel.currentSha || "nothing deployed" }),
+      $("dt", { text: "Previous SHA" }), $("dd", { class: "mono", text: rel.previousSha || "none" }),
+      $("dt", { text: "Deployed at" }), $("dd", { text: rel.deployedAt ? fmt(rel.deployedAt) : "—" }),
+      $("dt", { text: "Last result" }), $("dd", { text: rel.result || "—" }),
+      $("dt", { text: "Detail" }), $("dd", { text: rel.detail || "—" }),
+    ]),
+  ]));
+
+  if (s && s.production) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Services" })]);
+    const t = $("table");
+    t.appendChild($("tr", {}, [$("th", { text: "Container" }), $("th", { text: "State" })]));
+    for (const [k, v] of Object.entries(s.production)) {
+      const ok = /running/.test(v) && !/unhealthy/.test(v);
+      t.appendChild($("tr", {}, [
+        $("td", { class: "mono", text: "bigcapital-prod-" + k }),
+        $("td", {}, [$("span", { class: "pill " + (ok ? "s-ok" : "s-bad"), text: v })]),
+      ]));
+    }
+    c.appendChild($("div", { class: "scroll" }, [t]));
+    if (s.productionBackup) {
+      c.appendChild($("h3", { text: "Backups" }));
+      c.appendChild($("dl", { class: "kv" }, [
+        $("dt", { text: "Latest" }), $("dd", { class: "mono", text: s.productionBackup.path || "none" }),
+        $("dt", { text: "Taken" }), $("dd", { text: s.productionBackup.at || "—" }),
+        $("dt", { text: "Next run" }), $("dd", { text: s.productionBackup.nextRun || "—" }),
+      ]));
+    }
+    m.appendChild(c);
+  }
+
+  m.appendChild(gate({
+    title: "Deploy current approved origin/main",
+    lead: "Ships whatever origin/main currently is, unattached to a task. Use the task's own deploy button when a specific merge is being released.",
+    fetchPath: "/api/deploy/preflight",
+    actionPath: "/api/deploy",
+    actionLabel: "Deploy to production",
+    slow: true,
+    rows: p => [
+      ["Candidate SHA", short(p.candidateSha)],
+      ["Current production SHA", short(p.currentSha) || "none deployed"],
+      ["origin/main", short(p.originMainSha)],
+      ["local main", short(p.localMainSha)],
+      ["Commits ahead of production", p.commitsAhead],
+      ["Migrations changed", p.migrationsChanged === 0 ? "no" : p.migrationsChanged + " file(s)"],
+      ["Current health", p.healthOk ? "all checks passing" : "FAILING"],
+      ["Backup", p.backupReady ? p.backupAgeHours + "h old" : "NOT READY"],
+      ["Rollback target", short(p.rollbackTarget) || "none"],
+    ],
+  }));
+
+  const audit = $("div", { class: "card" }, [$("h2", { text: "Deployment audit trail" }),
+    $("p", { class: "sub", text: "Append-only. An approval is written before the attempt and is never rewritten by its outcome." })]);
+  const list = $("div", { class: "m", text: "Loading…" });
+  audit.appendChild(list);
+  api("/api/deploy/audit").then(a => {
+    list.textContent = "";
+    if (!a.events.length) { list.appendChild($("div", { class: "empty", text: "No deployments recorded yet." })); return; }
+    const t = $("table");
+    t.appendChild($("tr", {}, [["When","Event","SHA","Previous","Owner","Detail"].map(h => $("th", { text: h }))].flat()));
+    a.events.forEach(e => t.appendChild($("tr", {}, [
+      $("td", { text: fmt(e.ts) }),
+      $("td", {}, [$("span", { class: "pill " + (e.type === "DEPLOYED" ? "s-ok" : e.type === "DEPLOYMENT_FAILED" ? "s-bad" : "s-warn"), text: e.type.replace(/_/g, " ") })]),
+      $("td", { class: "mono", text: short(e.sha) }),
+      $("td", { class: "mono", text: short(e.previousSha) || "—" }),
+      $("td", { text: e.owner || "—" }),
+      $("td", { text: e.detail || e.health || "—" }),
+    ])));
+    list.appendChild($("div", { class: "scroll" }, [t]));
+  }).catch(e => { list.textContent = "Could not load audit trail: " + e.message; });
+  m.appendChild(audit);
   return m;
 }
 
@@ -456,7 +673,7 @@ function go(view, taskId) { state.view = view; state.taskId = taskId || null; re
 function render() {
   const nav = document.getElementById("nav");
   nav.textContent = "";
-  [["home","Home"],["tasks","Tasks"],["perf","Performance"],["system","System"]].forEach(([v, label]) => {
+  [["home","Home"],["tasks","Tasks"],["perf","Observatory"],["prod","Production"],["system","System"]].forEach(([v, label]) => {
     const b = $("button", { text: label, "aria-current": String(state.view === v) });
     b.onclick = () => go(v); nav.appendChild(b);
   });
@@ -470,6 +687,7 @@ function render() {
   main.appendChild(
     state.view === "tasks" ? viewTasks() :
     state.view === "perf" ? viewPerformance() :
+    state.view === "prod" ? viewProduction() :
     state.view === "system" ? viewSystem() :
     state.view === "task" ? viewTask(state.detail) : viewHome()
   );

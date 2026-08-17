@@ -22,6 +22,7 @@ import { CodexAdapter } from './agents/codex';
 import { Risk } from './types';
 import { runSelfTests } from './selftest';
 import { MergeManager } from './merge-manager';
+import { DeployManager } from './deploy-manager';
 import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -219,6 +220,32 @@ async function main(): Promise<number> {
       return 1;
     }
 
+    case 'deploy': {
+      const sub = argv[1];
+      // The task id is optional: deploying current approved origin/main with no
+      // task attached is a legitimate operation (that is how the first release
+      // ships). Anything that is not TASK-XXXX is not silently treated as one.
+      const maybeTask = argv[2] && /^TASK-\d+$/.test(argv[2]) ? argv[2] : undefined;
+      const dm = new DeployManager(events, tasks);
+      if (sub === 'preflight') {
+        out('RESULT:' + JSON.stringify(dm.preflight(maybeTask)));
+        return 0;
+      }
+      if (sub === 'approve') {
+        const oi = argv.indexOf('--owner');
+        const owner = oi >= 0 ? argv[oi + 1] : 'unknown';
+        const r = dm.approveAndDeploy(owner, maybeTask);
+        out('RESULT:' + JSON.stringify(r));
+        return r.ok ? 0 : 2;
+      }
+      if (sub === 'state') {
+        out('RESULT:' + JSON.stringify(dm.readReleaseState()));
+        return 0;
+      }
+      fail('usage: ai deploy <preflight|approve|state> [TASK-XXXX] [--owner <name>]');
+      return 1;
+    }
+
     case 'selftest':
       return await runSelfTests(REPO_ROOT);
 
@@ -234,6 +261,9 @@ async function main(): Promise<number> {
       out('  validate TASK-XXXX                       verify log integrity + report determinism');
       out('  merge preflight TASK-XXXX                show everything blocking a merge');
       out('  merge approve TASK-XXXX --owner <name>   controlled merge (records MERGE_APPROVED)');
+      out('  deploy preflight [TASK-XXXX]             show everything blocking a production deploy');
+      out('  deploy approve [TASK-XXXX] --owner <n>   controlled deploy (records DEPLOYMENT_APPROVED)');
+      out('  deploy state                             current production release state');
       out('  backfill stage0                          reconstruct Stage 0 history');
       out('  selftest                                 run the autopilot self-tests');
       return cmd ? 1 : 0;

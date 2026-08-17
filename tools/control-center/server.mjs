@@ -91,7 +91,18 @@ function sessionFrom(req) {
   const raw = req.headers.cookie ?? '';
   const m = new RegExp(`(?:^|;\\s*)${COOKIE}=([a-f0-9]{64})`).exec(raw);
   if (!m) return null;
-  const s = sessions.get(m[1]);
+  let s = sessions.get(m[1]);
+  if (!s) {
+    // Miss: re-read the session file before rejecting. The file is the durable
+    // record and the in-memory map is a cache of it, so a session minted
+    // out-of-process (the operator's `cc-session mint`, used to exercise the
+    // API without ever handling the owner's password) is honoured.
+    //
+    // This grants nothing new: the file is 0600 under a root-owned config tree,
+    // so anyone able to write it already controls the host.
+    loadSessions();
+    s = sessions.get(m[1]);
+  }
   if (!s || s.expires < Date.now()) return null;
   return { id: m[1], ...s };
 }
@@ -118,10 +129,20 @@ function noteAttempt(ip, ok) {
 // Autopilot projection — read the immutable event log, never a second store
 // ---------------------------------------------------------------------------
 
-function taskIds() {
+// Only real tasks. The deployment audit log lives under the same tasks/ tree so
+// it inherits the same append-only guarantees, but it is not a task and must
+// never inflate the task list or the Observatory's sample size.
+const TASK_ID = /^TASK-\d+$/;
+const DEPLOY_LOG_ID = 'DEPLOY-PRODUCTION';
+
+function logIds() {
   const dir = path.join(AI_DIR, 'tasks');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((d) => fs.existsSync(path.join(dir, d, 'events.jsonl'))).sort();
+}
+
+function taskIds() {
+  return logIds().filter((d) => TASK_ID.test(d));
 }
 
 function readEvents(taskId) {
@@ -153,7 +174,9 @@ const PHASES = [
   ['Fixes', ['FIXING']],
   ['Codex re-review', ['RE_REVIEW']],
   ['Final acceptance', ['FINAL_ACCEPTANCE']],
-  ['Ready to merge', ['READY_TO_MERGE', 'MERGED']],
+  ['Ready to merge', ['READY_TO_MERGE']],
+  ['Merged', ['MERGED']],
+  ['Deployed to production', ['DEPLOYED']],
 ];
 
 /** Derives everything the UI shows from the event log alone. */
@@ -171,7 +194,8 @@ function projectTask(taskId) {
       visited.add(e.payload.to);
     } else if (e.type === 'ESCALATION') state = 'ESCALATED';
     else if (e.type === 'READY_TO_MERGE') state = 'READY_TO_MERGE';
-    else if (e.type === 'MERGED') state = 'MERGED';
+    else if (e.type === 'MERGED') { state = 'MERGED'; visited.add('MERGED'); }
+    else if (e.type === 'DEPLOYED') { state = 'DEPLOYED'; visited.add('DEPLOYED'); }
     else if (e.type === 'PAUSED_RATE_LIMIT') state = 'PAUSED_RATE_LIMIT';
   }
 
@@ -180,9 +204,16 @@ function projectTask(taskId) {
     const current = states.includes(state);
     return { label, status: current ? 'running' : reached ? 'done' : 'pending' };
   });
-  if (['READY_TO_MERGE', 'MERGED'].includes(state)) {
-    for (const t of timeline) if (t.status === 'pending') t.status = 'done';
-    timeline[timeline.length - 1].status = 'done';
+  // Reaching a terminal state means every phase before it completed, even if a
+  // resumed run never emitted an explicit transition for one of them. Merge and
+  // deploy are separate approvals, so they are NOT back-filled: a merged task
+  // must still show "Deployed to production" as pending until it really is.
+  const TERMINAL_BACKFILL = { READY_TO_MERGE: 11, MERGED: 12, DEPLOYED: 13 };
+  const upto = TERMINAL_BACKFILL[state];
+  if (upto) {
+    for (let i = 0; i < upto && i < timeline.length; i += 1) {
+      if (timeline[i].status === 'pending') timeline[i].status = 'done';
+    }
   }
   const doneCount = timeline.filter((t) => t.status === 'done').length;
 
@@ -220,9 +251,26 @@ function projectTask(taskId) {
   const escalation = events.filter((e) => e.type === 'ESCALATION').map((e) => e.payload.reason);
   const pauses = events.filter((e) => e.type === 'PAUSED_RATE_LIMIT').map((e) => e.payload);
   const rtm = events.filter((e) => e.type === 'READY_TO_MERGE').map((e) => e.payload)[0] ?? null;
+  const mergeApproved = events.filter((e) => e.type === 'MERGE_APPROVED').map((e) => e.payload).pop() ?? null;
+  const merged = events.filter((e) => e.type === 'MERGED').map((e) => e.payload).pop() ?? null;
+  const deployApproved = events.filter((e) => e.type === 'DEPLOYMENT_APPROVED').map((e) => e.payload).pop() ?? null;
+  const deployed = events.filter((e) => e.type === 'DEPLOYED').map((e) => e.payload).pop() ?? null;
+  const deployFailed = events.filter((e) => e.type === 'DEPLOYMENT_FAILED').map((e) => e.payload);
+
+  // Provenance is stated per task rather than inferred site-wide: a live task
+  // and a reconstructed one must never be averaged into one number.
+  const provenance = events.some((e) => e.simulated) ? 'SIMULATED'
+    : events.some((e) => e.reconstructed) ? 'HISTORICAL / RECONSTRUCTED'
+    : 'LIVE';
 
   return {
     taskId,
+    provenance,
+    mergeApproved,
+    merged,
+    deployApproved,
+    deployed,
+    deployFailed,
     title: created.payload.title,
     risk: created.payload.risk,
     branch: created.payload.branch,
@@ -274,8 +322,14 @@ function summarize(e) {
     case 'ESCALATION': return String(p.reason);
     case 'PAUSED_RATE_LIMIT': return `${p.provider} quota reached (no API fallback)`;
     case 'READY_TO_MERGE': return `${p.branch} (auto-merge ${p.autoMerge ? 'on' : 'off'})`;
-    case 'MERGE_APPROVED': return `approved by ${p.owner}`;
-    case 'MERGED': return String(p.sha ?? '');
+    case 'MERGE_APPROVED': return `approved by ${p.authenticatedOwner ?? p.owner ?? 'unknown'}`;
+    case 'MERGED': return String(p.mergeSha ?? p.mainSha ?? p.sha ?? '').slice(0, 9);
+    case 'DEPLOYMENT_APPROVED':
+      return `${String(p.targetSha ?? '').slice(0, 9)} approved by ${p.authenticatedOwner ?? 'unknown'}`;
+    case 'DEPLOYED':
+      return `${String(p.deployedSha ?? '').slice(0, 9)} (was ${String(p.previousProductionSha ?? 'none').slice(0, 9)})`;
+    case 'DEPLOYMENT_FAILED':
+      return `${String(p.attemptedSha ?? '').slice(0, 9)}: ${p.detail ?? 'failed'}`;
     case 'BACKFILL_GAP': return `${p.what}`;
     case 'EVIDENCE_CONFLICT': return String(p.detail);
     case 'POLICY_BLOCK': return `${p.rule}: ${p.detail}`;
@@ -286,9 +340,31 @@ function summarize(e) {
 /** Observatory metrics, rebuilt from events every request. Never stored. */
 function metrics() {
   const ids = taskIds();
+  // Per-task provenance, stated rather than averaged. A reconstructed Stage 0
+  // and a live task are both real evidence but they are not the same kind of
+  // evidence, and collapsing them into one percentage would invent precision.
+  const tasks = ids.map((id) => {
+    const ev = readEvents(id);
+    const created = ev.find((e) => e.type === 'TASK_CREATED');
+    return {
+      taskId: id,
+      title: created?.payload?.title ?? id,
+      provenance: ev.some((e) => e.simulated) ? 'SIMULATED'
+        : ev.some((e) => e.reconstructed) ? 'HISTORICAL / RECONSTRUCTED'
+        : 'LIVE',
+      events: ev.length,
+      findings: ev.filter((e) => e.type === 'FINDING' || e.type === 'DESIGN_REVIEW')
+        .reduce((n, e) => n + (e.payload.findings ?? []).length, 0),
+      adjudications: ev.filter((e) => e.type === 'ADJUDICATION').length,
+    };
+  });
   const m = {
     sampleSize: ids.length,
-    historicalOnly: ids.every((id) => readEvents(id).some((e) => e.reconstructed)),
+    liveSampleSize: tasks.filter((t) => t.provenance === 'LIVE').length,
+    reconstructedSampleSize: tasks.filter((t) => t.provenance === 'HISTORICAL / RECONSTRUCTED').length,
+    simulatedSampleSize: tasks.filter((t) => t.provenance === 'SIMULATED').length,
+    tasks,
+    historicalOnly: ids.length > 0 && ids.every((id) => readEvents(id).some((e) => e.reconstructed)),
     claude: { designs: 0, adjudications: 0, confirmed: 0, partial: 0, rejected: 0 },
     claudeCode: { implementations: 0, fixRounds: 0, scopeExpansions: 0 },
     codex: { findings: 0, blockers: 0, confirmed: 0, partial: 0, rejected: 0, notAdjudicated: 0 },
@@ -338,14 +414,67 @@ function metrics() {
 // ---------------------------------------------------------------------------
 
 const AI_BIN = ['bash', '-lc'];
-function runAi(args, cb) {
+function runAi(args, cb, timeout = 120000) {
   // args is a fixed-shape array built here, never from user text except the
   // task title, which is passed as a single argv element (no shell parsing).
   const quoted = args.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
-  execFile(AI_BIN[0], [AI_BIN[1], `cd ${REPO} && pnpm ai ${quoted}`], { timeout: 120000, maxBuffer: 8 * 1024 * 1024 }, cb);
+  execFile(AI_BIN[0], [AI_BIN[1], `cd ${REPO} && pnpm ai ${quoted}`], { timeout, maxBuffer: 32 * 1024 * 1024 }, cb);
+}
+
+/** Pulls the single RESULT: line the CLI verbs print. */
+function parseResult(stdout, stderr) {
+  const out = String(stdout ?? '') + String(stderr ?? '');
+  const m = /RESULT:(\{[\s\S]*?\})\s*$/m.exec(out);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+/** Durable production release state, written by deploy-production. */
+function releaseState() {
+  const p = process.env.AI_RELEASE_FILE ?? '/srv/ai-accounting/state/release.env';
+  const out = { currentSha: null, previousSha: null, deployedAt: null, result: null, detail: null };
+  try {
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const m = /^([a-zA-Z]+)=(.*)$/.exec(line.trim());
+      if (m) out[m[1]] = m[2] || null;
+    }
+  } catch { /* nothing deployed yet */ }
+  return out;
+}
+
+/** The deployment audit stream, projected for display. Never a second store. */
+function deploymentAudit(limit = 40) {
+  const seen = [];
+  for (const id of logIds()) {
+    for (const e of readEvents(id)) {
+      if (!['DEPLOYMENT_APPROVED', 'DEPLOYED', 'DEPLOYMENT_FAILED'].includes(e.type)) continue;
+      seen.push({
+        logId: id,
+        taskId: e.payload.taskId ?? null,
+        seq: e.seq,
+        ts: e.ts,
+        type: e.type,
+        owner: e.payload.authenticatedOwner ?? e.payload.approvedBy ?? null,
+        sha: e.payload.deployedSha ?? e.payload.targetSha ?? e.payload.attemptedSha ?? null,
+        previousSha: e.payload.previousProductionSha ?? null,
+        detail: e.payload.detail ?? null,
+        health: e.payload.healthResult ?? null,
+        backup: e.payload.backupState ?? null,
+        migrationsReversed: e.payload.migrationsReversed ?? null,
+      });
+    }
+  }
+  seen.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  return seen.slice(0, limit);
 }
 
 const running = new Map(); // taskId -> child process
+
+// A deployment rebuilds images and restarts the production stack. Two at once
+// would race over the same containers, so it is serialised here as well as by
+// the lock file deploy-production takes.
+let deploying = false;
+const DEPLOY_TIMEOUT_MS = 45 * 60 * 1000;
 
 function startRun(taskId) {
   if (running.has(taskId)) return false;
@@ -367,10 +496,23 @@ function startRun(taskId) {
 // ---------------------------------------------------------------------------
 
 const clients = new Set();
+
+// A short replay buffer so a reconnecting browser can ask for what it missed
+// via Last-Event-ID instead of silently skipping a transition. Bounded: this is
+// a recovery window, not a second event store.
+let sseSeq = 0;
+const REPLAY_MAX = 200;
+const replay = [];
+
 function broadcast(taskId) {
-  const payload = JSON.stringify({ taskId, at: new Date().toISOString() });
+  sseSeq += 1;
+  const id = sseSeq;
+  const payload = JSON.stringify({ taskId, at: new Date().toISOString(), id });
+  replay.push({ id, payload });
+  if (replay.length > REPLAY_MAX) replay.shift();
+  const frame = `id: ${id}\nevent: change\ndata: ${payload}\n\n`;
   for (const res of clients) {
-    try { res.write(`event: change\ndata: ${payload}\n\n`); } catch { /* dropped */ }
+    try { res.write(frame); } catch { /* dropped */ }
   }
 }
 // The event log is the source of truth, so change detection is a cheap poll of
@@ -414,7 +556,27 @@ async function systemStatus() {
   const redis = await sh('docker inspect -f "{{.State.Status}}" ai-accounting-redis-1 2>/dev/null || echo missing');
   const accounting = await sh(`curl -s -o /dev/null -w "%{http_code}" --max-time 8 ${ACCOUNTING_URL}/ 2>/dev/null || echo 000`);
 
+  // Production is reported from the stack itself, never from "Traefik said
+  // 200" — a 200 on / is nginx serving the SPA and proves nothing about the
+  // database, the queue or object storage behind it.
+  const prodNames = ['mysql', 'redis', 'minio', 'gotenberg', 'server', 'webapp', 'envoy'];
+  const production = {};
+  await Promise.all(prodNames.map(async (n) => {
+    production[n] = await sh(
+      `docker inspect -f '{{.State.Status}}{{if .State.Health}}/{{.State.Health.Status}}{{end}}' bigcapital-prod-${n} 2>/dev/null || echo missing`,
+    );
+  }));
+  const backupPath = await sh('readlink -f /srv/ai-accounting/backups/production/latest 2>/dev/null || true');
+  const backupAt = backupPath
+    ? await sh(`stat -c %y "${backupPath}/mariadb-all.sql.gz" 2>/dev/null | cut -d. -f1 || true`)
+    : '';
+  const backupTimer = await sh('systemctl list-timers ai-accounting-backup.timer --no-pager 2>/dev/null | sed -n 2p | tr -s " " | cut -d" " -f1-3');
+
   return {
+    release: releaseState(),
+    production,
+    productionBackup: { path: backupPath || null, at: backupAt || null, nextRun: backupTimer || null },
+    deploying,
     environment: ENVIRONMENT,
     accountingUrl: ACCOUNTING_URL,
     accountingHttp: accounting,
@@ -639,30 +801,90 @@ async function handle(req, res) {
       if (action === 'deploy') {
         const t = projectTask(taskId);
         if (!t) return json(res, 404, { error: 'unknown task' });
+        // Merge and deploy are two separate owner approvals. A task that has
+        // just merged does not ship itself, whatever its risk.
         if (t.state !== 'MERGED') return json(res, 409, { error: `task is ${t.state}, not MERGED` });
-        return json(res, 501, {
-          error: 'production deployment from the browser is not enabled yet',
-          detail: 'DEPLOYMENT_APPROVED/DEPLOYED are modelled; the production stack is still being brought up.',
-        });
+        if (deploying) return json(res, 409, { error: 'a deployment is already in progress' });
+        deploying = true;
+        return runAi(['deploy', 'approve', taskId, '--owner', sess.user], (err, stdout, stderr) => {
+          deploying = false;
+          broadcast(taskId);
+          const parsed = parseResult(stdout, stderr);
+          if (parsed && parsed.ok) return json(res, 200, parsed);
+          return json(res, 409, parsed ?? {
+            error: 'deployment refused',
+            detail: (String(stdout ?? '') + String(stderr ?? '')).slice(-1500),
+          });
+        }, DEPLOY_TIMEOUT_MS);
       }
     }
   }
 
   const pre = /^\/api\/tasks\/(TASK-\d+)\/merge-preflight$/.exec(p);
   if (pre && req.method === 'GET') {
-    return runAi(['merge', 'preflight', pre[1]], (err, stdout) => {
-      const m = /RESULT:(\{[\s\S]*\})/.exec(String(stdout ?? ''));
-      try { return json(res, 200, m ? JSON.parse(m[1]) : { ok: false, problems: ['preflight produced no result'] }); }
-      catch { return json(res, 200, { ok: false, problems: ['preflight output could not be parsed'] }); }
+    return runAi(['merge', 'preflight', pre[1]], (err, stdout, stderr) => {
+      const parsed = parseResult(stdout, stderr);
+      return json(res, 200, parsed ?? { ok: false, problems: ['preflight produced no parseable result'] });
     });
+  }
+
+  const dpre = /^\/api\/tasks\/(TASK-\d+)\/deploy-preflight$/.exec(p);
+  if (dpre && req.method === 'GET') {
+    return runAi(['deploy', 'preflight', dpre[1]], (err, stdout, stderr) => {
+      const parsed = parseResult(stdout, stderr);
+      return json(res, 200, parsed ?? { ok: false, problems: ['deploy preflight produced no parseable result'] });
+    }, 180000);
+  }
+
+  // Deploying current approved origin/main with no task attached — how the
+  // first release ships, and how a release is re-applied after an incident.
+  if (p === '/api/deploy/preflight' && req.method === 'GET') {
+    return runAi(['deploy', 'preflight'], (err, stdout, stderr) => {
+      const parsed = parseResult(stdout, stderr);
+      return json(res, 200, parsed ?? { ok: false, problems: ['deploy preflight produced no parseable result'] });
+    }, 180000);
+  }
+
+  if (p === '/api/deploy' && req.method === 'POST') {
+    if (deploying) return json(res, 409, { error: 'a deployment is already in progress' });
+    deploying = true;
+    return runAi(['deploy', 'approve', '--owner', sess.user], (err, stdout, stderr) => {
+      deploying = false;
+      broadcast(null);
+      const parsed = parseResult(stdout, stderr);
+      if (parsed && parsed.ok) return json(res, 200, parsed);
+      return json(res, 409, parsed ?? {
+        error: 'deployment refused',
+        detail: (String(stdout ?? '') + String(stderr ?? '')).slice(-1500),
+      });
+    }, DEPLOY_TIMEOUT_MS);
+  }
+
+  if (p === '/api/deploy/audit' && req.method === 'GET') {
+    return json(res, 200, { release: releaseState(), events: deploymentAudit() });
   }
 
   if (p === '/api/metrics' && req.method === 'GET') return json(res, 200, metrics());
   if (p === '/api/system/status' && req.method === 'GET') return json(res, 200, await systemStatus());
 
   if (p === '/api/events/stream') {
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-    res.write('event: hello\ndata: {}\n\n');
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    res.write(`event: hello\ndata: ${JSON.stringify({ lastEventId: sseSeq })}\n\n`);
+    // Replay anything the client missed while disconnected. `Last-Event-ID` is
+    // the standard header; the query parameter is for clients (and tests) that
+    // cannot set headers on an EventSource.
+    const lastRaw = req.headers['last-event-id'] ?? url.searchParams.get('lastEventId');
+    const last = Number.parseInt(String(lastRaw ?? ''), 10);
+    if (Number.isFinite(last)) {
+      for (const r of replay) {
+        if (r.id > last) res.write(`id: ${r.id}\nevent: change\ndata: ${r.payload}\n\n`);
+      }
+    }
     clients.add(res);
     const ka = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { /* gone */ } }, 25000);
     req.on('close', () => { clearInterval(ka); clients.delete(res); });
