@@ -12,7 +12,7 @@ export class InvoiceCostGLEntriesSubscriber {
    * Writes the invoices cost GL entries once the inventory cost lots be written.
    * @param {IInventoryCostLotsGLEntriesWriteEvent}
    */
-  @OnEvent(events.inventory.onCostLotsGLEntriesWrite)
+  @OnEvent(events.inventory.onCostLotsGLEntriesWrite, { suppressErrors: false })
   async writeInvoicesCostEntriesOnCostLotsWritten({
     trx,
     startingDate,

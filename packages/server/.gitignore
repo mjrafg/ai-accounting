@@ -17,6 +17,10 @@ lerna-debug.log*
 
 # Tests
 /coverage
+
+# Per-run output of the isolated E2E runner. The checked-in artifact is
+# test/e2e-baseline.json; this is the throwaway result of the latest run.
+/test/e2e-results.json
 /.nyc_output
 
 # IDEs and editors

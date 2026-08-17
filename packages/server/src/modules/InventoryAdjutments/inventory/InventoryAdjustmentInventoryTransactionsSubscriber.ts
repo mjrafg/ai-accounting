@@ -19,7 +19,7 @@ export class InventoryAdjustmentInventoryTransactionsSubscriber {
    * @param {IInventoryAdjustmentEventPublishedPayload} payload
    * @param {IInventoryAdjustmentEventCreatedPayload} payload -
    */
-  @OnEvent(events.inventoryAdjustment.onQuickCreated)
+  @OnEvent(events.inventoryAdjustment.onQuickCreated, { suppressErrors: false })
   public async handleWriteInventoryTransactionsOncePublished({
     inventoryAdjustment,
     trx,
@@ -37,7 +37,7 @@ export class InventoryAdjustmentInventoryTransactionsSubscriber {
    * Handles reverting invetory transactions once the inventory adjustment deleted.
    * @param {IInventoryAdjustmentEventDeletedPayload} payload -
    */
-  @OnEvent(events.inventoryAdjustment.onDeleted)
+  @OnEvent(events.inventoryAdjustment.onDeleted, { suppressErrors: false })
   public async handleRevertInventoryTransactionsOnceDeleted({
     inventoryAdjustmentId,
     oldInventoryAdjustment,

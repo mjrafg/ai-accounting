@@ -17,7 +17,7 @@ export class CreditNoteGLEntriesSubscriber {
    * Writes the GL entries once the credit note transaction created or open.
    * @param {ICreditNoteCreatedPayload|ICreditNoteOpenedPayload} payload -
    */
-  @OnEvent(events.creditNote.onCreated)
+  @OnEvent(events.creditNote.onCreated, { suppressErrors: false })
   public async writeGlEntriesOnceCreditNoteCreated({
     creditNote,
     trx,
@@ -35,7 +35,7 @@ export class CreditNoteGLEntriesSubscriber {
    * Writes the GL entries once the vendor credit transaction opened.
    * @param {ICreditNoteOpenedPayload} payload
    */
-  @OnEvent(events.creditNote.onOpened)
+  @OnEvent(events.creditNote.onOpened, { suppressErrors: false })
   public async writeGLEntriesOnceCreditNoteOpened({
     creditNote,
     trx,
@@ -49,7 +49,7 @@ export class CreditNoteGLEntriesSubscriber {
   /**
    * Reverts GL entries once credit note deleted.
    */
-  @OnEvent(events.creditNote.onDeleted)
+  @OnEvent(events.creditNote.onDeleted, { suppressErrors: false })
   public async revertGLEntriesOnceCreditNoteDeleted({
     oldCreditNote,
     creditNoteId,
@@ -58,14 +58,17 @@ export class CreditNoteGLEntriesSubscriber {
     // Can't continue if the credit note is not published yet.
     if (!oldCreditNote.isPublished) return;
 
-    await this.creditNoteGLEntries.revertVendorCreditGLEntries(creditNoteId);
+    await this.creditNoteGLEntries.revertVendorCreditGLEntries(
+      creditNoteId,
+      trx,
+    );
   }
 
   /**
    * Edits vendor credit associated GL entries once the transaction edited.
    * @param {ICreditNoteEditedPayload} payload -
    */
-  @OnEvent(events.creditNote.onEdited)
+  @OnEvent(events.creditNote.onEdited, { suppressErrors: false })
   public async editVendorCreditGLEntriesOnceEdited({
     creditNote,
     trx,

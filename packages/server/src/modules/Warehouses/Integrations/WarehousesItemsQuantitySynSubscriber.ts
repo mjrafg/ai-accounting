@@ -19,7 +19,9 @@ export class WarehousesItemsQuantitySyncSubscriber {
    * Syncs warehouses items quantity once inventory transactions created.
    * @param {IInventoryTransactionsCreatedPayload}
    */
-  @OnEvent(events.inventory.onInventoryTransactionsCreated)
+  @OnEvent(events.inventory.onInventoryTransactionsCreated, {
+    suppressErrors: false,
+  })
   async syncWarehousesItemsQuantityOnInventoryTransCreated({
     inventoryTransactions,
     trx,
@@ -39,7 +41,9 @@ export class WarehousesItemsQuantitySyncSubscriber {
    * Syncs warehouses items quantity once inventory transactions deleted.
    * @param {IInventoryTransactionsDeletedPayload}
    */
-  @OnEvent(events.inventory.onInventoryTransactionsDeleted)
+  @OnEvent(events.inventory.onInventoryTransactionsDeleted, {
+    suppressErrors: false,
+  })
   async syncWarehousesItemsQuantityOnInventoryTransDeleted({
     oldInventoryTransactions,
     trx,

@@ -15,7 +15,7 @@ export class BillPaymentGLEntriesSubscriber {
   /**
    * Handle bill payment writing journal entries once created.
    */
-  @OnEvent(events.billPayment.onCreated)
+  @OnEvent(events.billPayment.onCreated, { suppressErrors: false })
   async handleWriteJournalEntries({
     billPayment,
     trx,
@@ -28,7 +28,7 @@ export class BillPaymentGLEntriesSubscriber {
   /**
    * Handle bill payment re-writing journal entries once the payment transaction be edited.
    */
-  @OnEvent(events.billPayment.onEdited)
+  @OnEvent(events.billPayment.onEdited, { suppressErrors: false })
   async handleRewriteJournalEntriesOncePaymentEdited({
     billPayment,
     trx,
@@ -42,7 +42,7 @@ export class BillPaymentGLEntriesSubscriber {
   /**
    * Reverts journal entries once bill payment deleted.
    */
-  @OnEvent(events.billPayment.onDeleted)
+  @OnEvent(events.billPayment.onDeleted, { suppressErrors: false })
   async handleRevertJournalEntries({
     billPaymentId,
     trx,

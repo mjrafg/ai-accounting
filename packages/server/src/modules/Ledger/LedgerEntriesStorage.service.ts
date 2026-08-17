@@ -1,11 +1,7 @@
 import { Knex } from 'knex';
-import * as async from 'async';
 import { Inject, Injectable } from '@nestjs/common';
 import { transformLedgerEntryToTransaction } from './utils';
-import {
-  ILedgerEntry,
-  ISaveLedgerEntryQueuePayload,
-} from './types/Ledger.types';
+import { ILedgerEntry } from './types/Ledger.types';
 import { ILedger } from './types/Ledger.types';
 import { AccountTransaction } from '../Accounts/models/AccountTransaction.model';
 import { TenantModelProxy } from '../System/models/TenantBaseModel';
@@ -33,13 +29,23 @@ export class LedgerEntriesStorageService {
    * @returns {Promise<void>}
    */
   public saveEntries = async (ledger: ILedger, trx?: Knex.Transaction) => {
-    const saveEntryQueue = async.queue(this.saveEntryTask.bind(this), 10);
     const entries = ledger.filter(filterBlankEntry).getEntries();
 
-    entries.forEach((entry) => {
-      saveEntryQueue.push({ entry, trx });
-    });
-    if (entries.length > 0) await saveEntryQueue.drain();
+    // Sequential and awaited on purpose.
+    //
+    // This previously used `async.queue(..., 10)` drained with `queue.drain()`.
+    // `drain()` resolves when the queue empties regardless of whether a worker
+    // threw, and no `queue.error` handler was registered, so an insert failure
+    // was swallowed: the caller saw success, the enclosing transaction was
+    // committed, and a partially-written ledger was persisted.
+    //
+    // The concurrency was illusory anyway - every entry is written on the same
+    // Knex transaction/connection, and the driver serialises statements on it.
+    // A plain loop keeps the ordering, and the first failure now propagates to
+    // LedgerStorageService and rolls the transaction back.
+    for (const entry of entries) {
+      await this.saveEntry(entry, trx);
+    }
   };
 
   /**
@@ -72,18 +78,5 @@ export class LedgerEntriesStorageService {
     const transaction = transformLedgerEntryToTransaction(entry);
 
     await this.accountTransactionModel().query(trx).insert(transaction);
-  };
-
-  /**
-   * Save the ledger entry to the transactions repository async task.
-   * @param {ISaveLedgerEntryQueuePayload} task - Task payload.
-   * @returns {Promise<void>}
-   */
-  private saveEntryTask = async (
-    task: ISaveLedgerEntryQueuePayload,
-  ): Promise<void> => {
-    const { entry, trx } = task;
-
-    await this.saveEntry(entry, trx);
   };
 }

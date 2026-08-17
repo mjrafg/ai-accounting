@@ -14,7 +14,7 @@ export class InvoicePaymentGLRewriteSubscriber {
    * Writes associated invoiceso of payment receive once edit.
    * @param {ISaleInvoiceEditingPayload} -
    */
-  @OnEvent(events.saleInvoice.onEdited)
+  @OnEvent(events.saleInvoice.onEdited, { suppressErrors: false })
   async paymentGLEntriesRewriteOnPaymentEdit({
     oldSaleInvoice,
     trx,

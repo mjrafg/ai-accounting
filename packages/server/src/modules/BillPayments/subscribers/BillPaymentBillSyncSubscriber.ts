@@ -19,7 +19,7 @@ export class BillPaymentBillSyncSubscriber {
    * Handle bill increment/decrement payment amount
    * once created, edited or deleted.
    */
-  @OnEvent(events.billPayment.onCreated)
+  @OnEvent(events.billPayment.onCreated, { suppressErrors: false })
   async handleBillIncrementPaymentOnceCreated({
     billPayment,
     trx,
@@ -39,7 +39,7 @@ export class BillPaymentBillSyncSubscriber {
   /**
    * Handle bill increment/decrement payment amount once edited.
    */
-  @OnEvent(events.billPayment.onEdited)
+  @OnEvent(events.billPayment.onEdited, { suppressErrors: false })
   async handleBillIncrementPaymentOnceEdited({
     billPayment,
     oldBillPayment,
@@ -61,7 +61,7 @@ export class BillPaymentBillSyncSubscriber {
   /**
    * Handle revert bills payment amount once bill payment deleted.
    */
-  @OnEvent(events.billPayment.onDeleted)
+  @OnEvent(events.billPayment.onDeleted, { suppressErrors: false })
   async handleBillDecrementPaymentAmount({
     oldBillPayment,
     trx,

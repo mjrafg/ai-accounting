@@ -14,7 +14,9 @@ export class InventoryCostGLBeforeWriteSubscriber {
    * Writes the receipts cost GL entries once the inventory cost lots be written.
    * @param {IInventoryCostLotsGLEntriesWriteEvent}
    */
-  @OnEvent(events.inventory.onCostLotsGLEntriesBeforeWrite)
+  @OnEvent(events.inventory.onCostLotsGLEntriesBeforeWrite, {
+    suppressErrors: false,
+  })
   public async revertsInventoryCostGLEntries({
     trx,
     startingDate,

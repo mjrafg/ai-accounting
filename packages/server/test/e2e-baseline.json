@@ -1,0 +1,1414 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "commit": "bc8c8f12c82a83932aa45eede890116cbc5c0a2f",
+    "node": "18.16.1",
+    "jest": "29.7.0",
+    "nestCore": "10.4.7",
+    "knex": "3.1.0",
+    "objection": "3.1.5",
+    "mysqlDriver": "2.18.1",
+    "eventemitter2": "6.4.9",
+    "executionMode": "one-process-per-spec-sequential",
+    "dbPolicy": "fresh-tenant-per-run-shared-across-specs",
+    "mariadb": "10.6.28-MariaDB-ubu2204",
+    "redis": "6.2.21"
+  },
+  "executionOrder": [
+    "test/accounts.e2e-spec.ts",
+    "test/api-keys.e2e-spec.ts",
+    "test/attachments.e2e-spec.ts",
+    "test/auth.e2e-spec.ts",
+    "test/bank-rules.e2e-spec.ts",
+    "test/banking-accounts.e2e-spec.ts",
+    "test/banking-categorize.e2e-spec.ts",
+    "test/banking-exclude.e2e-spec.ts",
+    "test/banking-matching.e2e-spec.ts",
+    "test/banking-pending.e2e-spec.ts",
+    "test/banking-recognized.e2e-spec.ts",
+    "test/banking-transactions.e2e-spec.ts",
+    "test/banking-uncategorized.e2e-spec.ts",
+    "test/bill-landed-costs.e2e-spec.ts",
+    "test/bill-payments.e2e-spec.ts",
+    "test/bills.e2e-spec.ts",
+    "test/branches.e2e-spec.ts",
+    "test/contacts.e2e-spec.ts",
+    "test/credit-note-refunds.e2e-spec.ts",
+    "test/credit-notes-apply-invoice.e2e-spec.ts",
+    "test/credit-notes.e2e-spec.ts",
+    "test/currencies.e2e-spec.ts",
+    "test/customers.e2e-spec.ts",
+    "test/dashboard.e2e-spec.ts",
+    "test/expenses.e2e-spec.ts",
+    "test/export.e2e-spec.ts",
+    "test/financial-statements.e2e-spec.ts",
+    "test/import.e2e-spec.ts",
+    "test/inventory-adjustment.e2e-spec.ts",
+    "test/inventory-cost.e2e-spec.ts",
+    "test/item-categories.e2e-spec.ts",
+    "test/items.e2e-spec.ts",
+    "test/manual-journal.e2e-spec.ts",
+    "test/organization.e2e-spec.ts",
+    "test/payment-links.e2e-spec.ts",
+    "test/payment-received.e2e-spec.ts",
+    "test/payment-services.e2e-spec.ts",
+    "test/pdf-templates.e2e-spec.ts",
+    "test/resource.e2e-spec.ts",
+    "test/roles.e2e-spec.ts",
+    "test/sale-estimates.e2e-spec.ts",
+    "test/sale-invoices.e2e-spec.ts",
+    "test/sale-receipts.e2e-spec.ts",
+    "test/settings.e2e-spec.ts",
+    "test/tax-rates.e2e-spec.ts",
+    "test/transactions-locking.e2e-spec.ts",
+    "test/users-invite.e2e-spec.ts",
+    "test/users.e2e-spec.ts",
+    "test/vendor-credits-apply-bill.e2e-spec.ts",
+    "test/vendor-credits-refund.e2e-spec.ts",
+    "test/vendor-credits.e2e-spec.ts",
+    "test/vendors.e2e-spec.ts",
+    "test/views.e2e-spec.ts",
+    "test/warehouse-transfers.e2e-spec.ts",
+    "test/warehouses.e2e-spec.ts"
+  ],
+  "listenerSignature": {
+    "uniqueEventNames": 221,
+    "totalListenerRegistrations": 500,
+    "maxListeners": 10,
+    "criticalAccountingEvents": {
+      "onBillCreated": 6,
+      "onBillEdited": 7,
+      "onBillPaymentCreated": 5,
+      "onCreditNoteCreated": 5,
+      "onExpenseCreated": 4,
+      "onInventoryTransactionsCreated": 3,
+      "onManualJournalCreated": 5,
+      "onPaymentReceiveCreated": 6,
+      "onSaleInvoiceCreated": 8,
+      "onSaleInvoiceDeleted": 4,
+      "onSaleInvoiceEdited": 8,
+      "onSaleReceiptsCreated": 5,
+      "onVendorCreditCreated": 5
+    },
+    "perEvent": {
+      "onAccountActivated": 1,
+      "onAccountCreated": 2,
+      "onAccountDelete": 1,
+      "onAccountDeleted": 3,
+      "onAccountEdited": 1,
+      "onAccountViewed": 1,
+      "onBalanceSheetViewed": 1,
+      "onBankAccountDisconnected": 1,
+      "onBankRuleCreated": 3,
+      "onBankRuleDeleted": 3,
+      "onBankRuleDeleting": 1,
+      "onBankRuleEdited": 3,
+      "onBankTransactionExcluded": 3,
+      "onBankTransactionMatched": 2,
+      "onBankTransactionUnexcluded": 2,
+      "onBankTransactionUnmathced": 1,
+      "onBillCreated": 6,
+      "onBillCreating": 6,
+      "onBillDeleted": 5,
+      "onBillDeleting": 2,
+      "onBillEdited": 7,
+      "onBillEditing": 5,
+      "onBillLandedCostCreated": 3,
+      "onBillLandedCostDeleted": 3,
+      "onBillOpened": 3,
+      "onBillPaymentCreated": 5,
+      "onBillPaymentCreating": 3,
+      "onBillPaymentDeleted": 4,
+      "onBillPaymentDeleting": 3,
+      "onBillPaymentEdited": 6,
+      "onBillPaymentEditing": 2,
+      "onBranchActivated": 12,
+      "onBranchMarkedPrimary": 1,
+      "onCashflowStatementViewed": 1,
+      "onCashflowTransactionCategorized": 3,
+      "onCashflowTransactionCreated": 3,
+      "onCashflowTransactionCreating": 1,
+      "onCashflowTransactionDeleted": 2,
+      "onCashflowTransactionDeleting": 3,
+      "onComputeItemCostJobCompleted": 1,
+      "onContactActivated": 1,
+      "onContactInactivated": 1,
+      "onCreditNoteApplyToInvoiceCreated": 2,
+      "onCreditNoteApplyToInvoiceDeleted": 2,
+      "onCreditNoteCreated": 5,
+      "onCreditNoteCreating": 4,
+      "onCreditNoteDeleted": 3,
+      "onCreditNoteDeleting": 2,
+      "onCreditNoteEdited": 5,
+      "onCreditNoteEditing": 3,
+      "onCreditNoteOpened": 3,
+      "onCreditNoteRefundCreated": 3,
+      "onCreditNoteRefundCreating": 2,
+      "onCreditNoteRefundDeleted": 2,
+      "onCreditNoteRefundDeleting": 1,
+      "onCustomerBalanceSummaryViewed": 1,
+      "onCustomerCreated": 3,
+      "onCustomerCreating": 1,
+      "onCustomerDeleted": 3,
+      "onCustomerDeleting": 1,
+      "onCustomerEdited": 2,
+      "onCustomerOpeingBalanceChanged": 1,
+      "onCustomerOpeningBalanceChanging": 1,
+      "onCustomerTransactionsViewed": 1,
+      "onExpenseCreated": 4,
+      "onExpenseCreating": 3,
+      "onExpenseDeleted": 3,
+      "onExpenseDeleting": 3,
+      "onExpenseEdited": 5,
+      "onExpenseEditing": 2,
+      "onExpensePublished": 2,
+      "onExpensePublishing": 1,
+      "onGeneralLedgerViewed": 1,
+      "onImportFileCommitted": 1,
+      "onInventoryAdjustmentCreating": 2,
+      "onInventoryAdjustmentDeleted": 2,
+      "onInventoryAdjustmentDeleting": 1,
+      "onInventoryAdjustmentPublished": 3,
+      "onInventoryAdjustmentQuickCreated": 3,
+      "onInventoryCostEntriesWritten": 1,
+      "onInventoryCostLotsGLEntriesBeforeWrite": 1,
+      "onInventoryCostLotsGLEntriesWrite": 2,
+      "onInventoryTransactionsCreated": 3,
+      "onInventoryTransactionsDeleted": 2,
+      "onInventoryValuationViewed": 1,
+      "onItemActivated": 1,
+      "onItemCategoryCreated": 1,
+      "onItemCategoryDeleted": 1,
+      "onItemCategoryEdited": 1,
+      "onItemCreated": 2,
+      "onItemDeleted": 2,
+      "onItemDeleting": 1,
+      "onItemEdited": 2,
+      "onItemInactivated": 1,
+      "onItemViewed": 1,
+      "onJounralViewed": 1,
+      "onManualJournalCreated": 5,
+      "onManualJournalCreating": 3,
+      "onManualJournalDeleted": 3,
+      "onManualJournalDeleting": 3,
+      "onManualJournalEdited": 5,
+      "onManualJournalEditing": 2,
+      "onManualJournalPublished": 2,
+      "onManualJournalPublishing": 1,
+      "onOrganizationBaseCurrencyUpdated": 1,
+      "onOrganizationBuild": 3,
+      "onOrganizationBuilt": 1,
+      "onPayableAgingViewed": 1,
+      "onPaymentMethodDeleted": 1,
+      "onPaymentMethodEdited": 1,
+      "onPaymentReceiveCreated": 6,
+      "onPaymentReceiveCreating": 3,
+      "onPaymentReceiveDeleted": 4,
+      "onPaymentReceiveDeleting": 3,
+      "onPaymentReceiveEdited": 6,
+      "onPaymentReceiveEditing": 2,
+      "onPaymentReceiveMailSent": 1,
+      "onPaymentReceivedPdfViewed": 1,
+      "onPdfTemplateAssignedDefault": 1,
+      "onPdfTemplateCreated": 1,
+      "onPdfTemplateDeleted": 1,
+      "onPdfTemplatedEdited": 1,
+      "onPlaidItemCreated": 1,
+      "onPlaidTransactionsSynced": 1,
+      "onProfitLossSheetViewed": 1,
+      "onPublicSharableLinkGenerated": 1,
+      "onPurchasesByItemViewed": 1,
+      "onReceivableAgingViewed": 1,
+      "onRoleCreated": 1,
+      "onRoleDeleted": 1,
+      "onRoleEdited": 1,
+      "onSaleEstimateCreated": 4,
+      "onSaleEstimateCreating": 4,
+      "onSaleEstimateEdited": 4,
+      "onSaleEstimateEditing": 3,
+      "onSaleEstimateMailSent": 1,
+      "onSaleEstimatePdfViewed": 1,
+      "onSaleEstimateViewed": 1,
+      "onSaleEstimatedDeleted": 2,
+      "onSaleEstimatedDeleting": 2,
+      "onSaleInvoiceCreated": 8,
+      "onSaleInvoiceCreating": 5,
+      "onSaleInvoiceDelete": 2,
+      "onSaleInvoiceDeleted": 4,
+      "onSaleInvoiceDeleting": 2,
+      "onSaleInvoiceDelivered": 2,
+      "onSaleInvoiceEdited": 8,
+      "onSaleInvoiceEditing": 4,
+      "onSaleInvoiceItemViewed": 1,
+      "onSaleInvoiceMailReminderSent": 1,
+      "onSaleInvoiceMailSent": 2,
+      "onSaleInvoicePdfViewed": 1,
+      "onSaleInvoiceWriteoff": 1,
+      "onSaleInvoiceWrittenoff": 2,
+      "onSaleInvoiceWrittenoffCancel": 1,
+      "onSaleInvoiceWrittenoffCanceled": 2,
+      "onSaleReceiptClosed": 1,
+      "onSaleReceiptClosing": 1,
+      "onSaleReceiptsCreated": 5,
+      "onSaleReceiptsCreating": 4,
+      "onSaleReceiptsDeleted": 3,
+      "onSaleReceiptsDeleting": 2,
+      "onSaleReceiptsEdited": 5,
+      "onSaleReceiptsEditing": 3,
+      "onSalesByItemViewed": 1,
+      "onSendResetPassword": 1,
+      "onSignUp": 3,
+      "onStripeAccountUpdated": 1,
+      "onStripeCheckoutSessionCompleted": 1,
+      "onStripeOAuthCodeGranted": 2,
+      "onSubscriptionCancelled": 1,
+      "onSubscriptionPlanChanged": 1,
+      "onSubscriptionResumed": 1,
+      "onTaxRateActivated": 1,
+      "onTaxRateCreated": 1,
+      "onTaxRateDeleted": 1,
+      "onTaxRateEdited": 2,
+      "onTenantUserActivated": 2,
+      "onTenantUserDeleted": 1,
+      "onTenantUserEdited": 2,
+      "onTenantUserInactivated": 2,
+      "onTransactionLockingPartialUnlocked": 1,
+      "onTransactionUncategorized": 3,
+      "onTransactionUncategorizedCreated": 2,
+      "onTrialBalanceSheetViewed": 1,
+      "onUserAcceptInvite": 1,
+      "onUserInviteResend": 1,
+      "onUserSendInvite": 1,
+      "onUserSendInviteTenantSynced": 1,
+      "onVendorBalanceSummaryViewed": 1,
+      "onVendorCreated": 3,
+      "onVendorCreating": 1,
+      "onVendorCreditCreated": 5,
+      "onVendorCreditCreating": 4,
+      "onVendorCreditDeleted": 3,
+      "onVendorCreditDeleting": 2,
+      "onVendorCreditEdited": 5,
+      "onVendorCreditEditing": 3,
+      "onVendorCreditOpened": 3,
+      "onVendorCreditRefundCreated": 2,
+      "onVendorCreditRefundCreating": 1,
+      "onVendorCreditRefundDeleted": 1,
+      "onVendorCreditRefundDeleting": 1,
+      "onVendorDeleted": 3,
+      "onVendorEdited": 2,
+      "onVendorOpeingBalanceChanged": 1,
+      "onVendorOpeingBalanceChanging": 1,
+      "onVendorTransactionsViewed": 1,
+      "onWarehouseActivated": 9,
+      "onWarehouseCreated": 1,
+      "onWarehouseDeleted": 1,
+      "onWarehouseEdited": 1,
+      "onWarehouseTransferCreated": 3,
+      "onWarehouseTransferDeleted": 2,
+      "onWarehouseTransferEdited": 2,
+      "onWarehouseTransferInitated": 2,
+      "onWarehouseTransferTransferred": 2,
+      "onWorkspaceCreated": 1,
+      "onWorkspaceDeleted": 1,
+      "signUpConfirmResended": 1,
+      "signUpConfirmed": 1
+    }
+  },
+  "totals": {
+    "specFiles": 55,
+    "passed": 137,
+    "failed": 87,
+    "skipped": 0,
+    "bootstrapClean": 55,
+    "bootstrapFailed": 0
+  },
+  "specs": {
+    "test/accounts.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Accounts (e2e) /accounts (GET)",
+        "Accounts (e2e) /accounts (POST)",
+        "Accounts (e2e) /accounts/:id (DELETE)",
+        "Accounts (e2e) /accounts/:id (GET)",
+        "Accounts (e2e) /accounts/:id (PUT)",
+        "Accounts (e2e) /accounts/:id/activate (POST)",
+        "Accounts (e2e) /accounts/:id/inactivate (POST)",
+        "Accounts (e2e) /accounts/bulk-delete (POST)",
+        "Accounts (e2e) /accounts/types (GET)",
+        "Accounts (e2e) /accounts/validate-bulk-delete (POST)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/api-keys.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "API Keys (e2e) /api-keys (GET)",
+        "API Keys (e2e) /api-keys/generate (POST)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/attachments.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Attachments (e2e) /attachments/:id/presigned-url (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/auth.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Authentication (e2e) should send reset password success",
+        "Authentication (e2e) should signin success",
+        "Authentication (e2e) should signup success"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/bank-rules.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Bank Rules (e2e) /banking/rules (GET)",
+        "Bank Rules (e2e) /banking/rules (POST)",
+        "Bank Rules (e2e) /banking/rules/:id (DELETE)",
+        "Bank Rules (e2e) /banking/rules/:id (GET)",
+        "Bank Rules (e2e) /banking/rules/:id (PUT)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/banking-accounts.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Banking Accounts (e2e) /banking/accounts (GET)",
+        "Banking Accounts (e2e) /banking/accounts/:bankAccountId/summary (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/banking-categorize.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Banking Categorize (e2e) /banking/categorize/bulk (DELETE)"
+      ],
+      "failed": [
+        {
+          "name": "Banking Categorize (e2e) /banking/categorize (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Banking Categorize (e2e) /banking/categorize/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/banking-exclude.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Banking Exclude (e2e) /banking/exclude (GET)",
+        "Banking Exclude (e2e) /banking/exclude/bulk (DELETE)",
+        "Banking Exclude (e2e) /banking/exclude/bulk (PUT)"
+      ],
+      "failed": [
+        {
+          "name": "Banking Exclude (e2e) /banking/exclude/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Banking Exclude (e2e) /banking/exclude/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/banking-matching.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Banking Matching (e2e) /banking/matching/unmatch/:uncategorizedTransactionId (PATCH)"
+      ],
+      "failed": [
+        {
+          "name": "Banking Matching (e2e) /banking/matching/match (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Banking Matching (e2e) /banking/matching/matched (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/banking-pending.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Banking Pending Transactions (e2e) /banking/pending (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/banking-recognized.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Banking Recognized Transactions (e2e) /banking/recognized (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Banking Recognized Transactions (e2e) /banking/recognized/:recognizedTransactionId (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/banking-transactions.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Banking Transactions (e2e) /banking/transactions (POST)",
+        "Banking Transactions (e2e) /banking/transactions/:id (DELETE)",
+        "Banking Transactions (e2e) /banking/transactions/:id (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/banking-uncategorized.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Banking Uncategorized Transactions (e2e) /banking/uncategorized/accounts/:accountId (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Banking Uncategorized Transactions (e2e) /banking/uncategorized/:uncategorizedTransactionId (GET)",
+          "classification": "UNKNOWN",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Banking Uncategorized Transactions (e2e) /banking/uncategorized/autofill (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/bill-landed-costs.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Bill Landed Costs (e2e) /landed-cost/bills/:billId/transactions (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Landed Costs (e2e) /landed-cost/transactions (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/bill-payments.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Bill Payments (e2e) /bill-payments (GET)",
+        "Bill Payments (e2e) /bill-payments/new-page/entries (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Bill Payments (e2e) /bill-payments (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Payments (e2e) /bill-payments/:id (DELETE)",
+          "classification": "UNKNOWN",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Payments (e2e) /bill-payments/:id (GET)",
+          "classification": "UNKNOWN",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Payments (e2e) /bill-payments/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Payments (e2e) /bill-payments/:id/bills (GET)",
+          "classification": "UNKNOWN",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bill Payments (e2e) /bill-payments/:id/edit-page (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/bills.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Bills (e2e) /bills (GET)",
+        "Bills (e2e) /bills/:id/payment-transactions (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Bills (e2e) /bills (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/:id/open (PATCH)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/bulk-delete (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Bills (e2e) /bills/validate-bulk-delete (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/branches.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Branches (e2e) /branches (GET)",
+        "Branches (e2e) /branches (POST)",
+        "Branches (e2e) /branches/:id (DELETE)",
+        "Branches (e2e) /branches/:id (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Branches (e2e) /branches/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/contacts.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Contacts (e2e) /contacts/:id/inactivate (PATCH)",
+        "Contacts (e2e) /contacts/auto-complete (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Contacts (e2e) /contacts/:id/activate (PATCH)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/credit-note-refunds.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Credit Note Refunds (e2e) /credit-notes/:creditNoteId/refunds (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/credit-notes-apply-invoice.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Credit Notes Apply Invoice (e2e) /credit-notes/:creditNoteId/applied-invoices (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/credit-notes.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Credit Notes (e2e) /credit-notes (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Credit Notes (e2e) /credit-notes/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Credit Notes (e2e) /credit-notes/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Credit Notes (e2e) /credit-notes/:id/open (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/currencies.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Currencies (e2e) /currencies (GET)",
+        "Currencies (e2e) /currencies (POST)",
+        "Currencies (e2e) /currencies/:code (DELETE)",
+        "Currencies (e2e) /currencies/:currencyCode (GET)",
+        "Currencies (e2e) /currencies/:id (PUT)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/customers.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Customers (e2e) /customers (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Customers (e2e) /customers/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Customers (e2e) /customers/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Customers (e2e) /customers/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/dashboard.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Dashboard (e2e) /dashboard/boot (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/expenses.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Expenses (e2e) /expenses (GET) honors page and pageSize query params"
+      ],
+      "failed": [
+        {
+          "name": "Expenses (e2e) /expenses (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Expenses (e2e) /expenses/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Expenses (e2e) /expenses/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Expenses (e2e) /expenses/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/export.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Export (e2e) /export (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/financial-statements.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Financial Statements (e2e) /reports/balance-sheet (GET)",
+        "Financial Statements (e2e) /reports/cashflow-statement (GET)",
+        "Financial Statements (e2e) /reports/customer-balance-summary (GET)",
+        "Financial Statements (e2e) /reports/general-ledger (GET)",
+        "Financial Statements (e2e) /reports/inventory-item-details (GET)",
+        "Financial Statements (e2e) /reports/inventory-valuation (GET)",
+        "Financial Statements (e2e) /reports/journal (GET)",
+        "Financial Statements (e2e) /reports/payable-aging-summary (GET)",
+        "Financial Statements (e2e) /reports/profit-loss-sheet (GET)",
+        "Financial Statements (e2e) /reports/receivable-aging-summary (GET)",
+        "Financial Statements (e2e) /reports/sales-by-items (GET)",
+        "Financial Statements (e2e) /reports/transactions-by-customers (GET)",
+        "Financial Statements (e2e) /reports/transactions-by-reference (GET)",
+        "Financial Statements (e2e) /reports/transactions-by-vendors (GET)",
+        "Financial Statements (e2e) /reports/trial-balance-sheet (GET)",
+        "Financial Statements (e2e) /reports/vendor-balance-summary (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Financial Statements (e2e) /reports/purchases-by-items (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Financial Statements (e2e) /reports/sales-tax-liability-summary (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/import.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Import (e2e) /import/sample (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/inventory-adjustment.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Inventory Adjustments (e2e) /inventory-adjustments/:id (DELETE)",
+        "Inventory Adjustments (e2e) /inventory-adjustments/:id (GET)",
+        "Inventory Adjustments (e2e) /inventory-adjustments/:id/publish (POST)",
+        "Inventory Adjustments (e2e) /inventory-adjustments/quick (POST)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/inventory-cost.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Inventory Cost (e2e) /inventory-cost/items (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/item-categories.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Item Categories(e2e) /item-categories (POST)",
+        "Item Categories(e2e) /item-categories/:id (DELETE)",
+        "Item Categories(e2e) /item-categories/:id (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/items.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Items (e2e) /items (GET)",
+        "Items (e2e) /items (POST)",
+        "Items (e2e) /items/:id (DELETE)",
+        "Items (e2e) /items/:id (GET)",
+        "Items (e2e) /items/:id (PUT)",
+        "Items (e2e) /items/:id/activate (PATCH)",
+        "Items (e2e) /items/:id/bills (GET)",
+        "Items (e2e) /items/:id/estimates (GET)",
+        "Items (e2e) /items/:id/inactivate (PATCH)",
+        "Items (e2e) /items/:id/invoices (GET)",
+        "Items (e2e) /items/:id/receipts (GET)",
+        "Items (e2e) /items/bulk-delete (POST)",
+        "Items (e2e) /items/validate-bulk-delete (POST)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/manual-journal.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Manual Journals (e2e) /manual-journals (POST)",
+        "Manual Journals (e2e) /manual-journals/:id (DELETE)",
+        "Manual Journals (e2e) /manual-journals/:id (GET)",
+        "Manual Journals (e2e) /manual-journals/:id (PUT)",
+        "Manual Journals (e2e) /manual-journals/:id/publish (PATCH)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/organization.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Organization (e2e) /organization (GET)",
+        "Organization (e2e) /organization (POST)",
+        "Organization (e2e) /organization (PUT)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/payment-links.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Payment Links (e2e) /payment-links/:paymentLinkId/invoice (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/payment-received.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Payment Received (e2e) /payments-received/state (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Payment Received (e2e) /payments-received (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Payment Received (e2e) /payments-received/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Payment Received (e2e) /payments-received/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Payment Received (e2e) /payments-received/:id/invoices (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Payment Received (e2e) /payments-received/:id/mail (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Payment Received (e2e) /payments-received/:id/mail (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/payment-services.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Payment Services (e2e) /payment-services (GET)",
+        "Payment Services (e2e) /payment-services/state (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Payment Services (e2e) /payment-services/:paymentServiceId (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/pdf-templates.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Pdf Templates (e2e) /pdf-templates (DELETE)",
+        "Pdf Templates (e2e) /pdf-templates (POST)",
+        "Pdf Templates (e2e) /pdf-templates/:id (GET)",
+        "Pdf Templates (e2e) /pdf-templates/:id/assign-default (POST)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/resource.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Resource (e2e) /resources/:resourceModel/meta (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/roles.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Roles (e2e) /roles (GET)",
+        "Roles (e2e) /roles (POST)",
+        "Roles (e2e) /roles/:id (DELETE)",
+        "Roles (e2e) /roles/:id (GET)",
+        "Roles (e2e) /roles/:id (PUT)",
+        "Roles (e2e) /roles/permissions/schema (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/sale-estimates.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Sale Estimates (e2e) /sale-estimates (GET)",
+        "Sale Estimates (e2e) /sale-estimates/state (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates/:id/approve (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates/:id/mail (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates/:id/mail (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Estimates (e2e) /sale-estimates/:id/reject (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/sale-invoices.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Sale Invoices (e2e) /sale-invoices/state (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/cancel-writeoff (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/deliver (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/mail (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/mail (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/payments (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Invoices (e2e) /sale-invoices/:id/writeoff (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/sale-receipts.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Sale Receipts (e2e) /sale-receipts (GET)",
+        "Sale Receipts (e2e) /sale-receipts/:id (DELETE)"
+      ],
+      "failed": [
+        {
+          "name": "Sale Receipts (e2e) /sale-receipts/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Receipts (e2e) /sale-receipts/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Receipts (e2e) /sale-receipts/:id/mail (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Sale Receipts (e2e) /sale-reeipts (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/settings.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Settings (e2e) /settings (GET)",
+        "Settings (e2e) /settings (PUT)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/tax-rates.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Item Categories(e2e) /tax-rates (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Item Categories(e2e) /tax-rates/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/transactions-locking.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Transactions Locking (e2e) /transactions-locking (GET)",
+        "Transactions Locking (e2e) /transactions-locking/:module (GET)",
+        "Transactions Locking (e2e) /transactions-locking/cancel-unlock-partial (PUT)",
+        "Transactions Locking (e2e) /transactions-locking/lock (PUT)",
+        "Transactions Locking (e2e) /transactions-locking/unlock-partial (PUT)"
+      ],
+      "failed": [
+        {
+          "name": "Transactions Locking (e2e) /transactions-locking/cancel-lock (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/users-invite.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Users Invite (e2e) /invite (PATCH)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/users.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Users (e2e) /users (GET)",
+        "Users (e2e) /users/:id (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Users (e2e) /users/:id (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/vendor-credits-apply-bill.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Vendor Credits Apply Bills (e2e) /vendor-credits/:vendorCreditId/applied-bills (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Vendor Credits Apply Bills (e2e) /vendor-credits/:vendorCreditId/bills-to-apply (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/vendor-credits-refund.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Vendor Credits Refund (e2e) /vendor-credits/:vendorCreditId/refund (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/vendor-credits.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [],
+      "failed": [
+        {
+          "name": "Vendor Credits (e2e) /vendor-credits (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Vendor Credits (e2e) /vendor-credits/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Vendor Credits (e2e) /vendor-credits/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Vendor Credits (e2e) /vendor-credits/:id/open (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/vendors.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Vendors (e2e) /vendors (POST)",
+        "Vendors (e2e) /vendors/:id (DELETE)",
+        "Vendors (e2e) /vendors/:id (GET)",
+        "Vendors (e2e) /vendors/:id (PUT)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/views.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 0,
+      "passed": [
+        "Views (e2e) /views/resource/:resourceModel (GET)"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "test/warehouse-transfers.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Warehouse Transfers (e2e) /warehouse-transfers (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Warehouse Transfers (e2e) /warehouse-transfers (POST)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Warehouse Transfers (e2e) /warehouse-transfers/:id (DELETE)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Warehouse Transfers (e2e) /warehouse-transfers/:id (GET)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        },
+        {
+          "name": "Warehouse Transfers (e2e) /warehouse-transfers/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    },
+    "test/warehouses.e2e-spec.ts": {
+      "bootstrap": "CLEAN",
+      "bootstrapErrorClass": null,
+      "exitCode": 1,
+      "passed": [
+        "Warehouses (e2e) /warehouses (GET)",
+        "Warehouses (e2e) /warehouses (POST)",
+        "Warehouses (e2e) /warehouses/:id (DELETE)",
+        "Warehouses (e2e) /warehouses/:id (GET)"
+      ],
+      "failed": [
+        {
+          "name": "Warehouses (e2e) /warehouses/:id (PUT)",
+          "classification": "ASSERTION",
+          "evidence": "failed after a CLEAN bootstrap"
+        }
+      ],
+      "skipped": []
+    }
+  }
+}

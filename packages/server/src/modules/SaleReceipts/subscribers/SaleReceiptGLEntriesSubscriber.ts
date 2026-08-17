@@ -16,8 +16,8 @@ export class SaleReceiptGLEntriesSubscriber {
    * Handles writing sale receipt income journal entries once created.
    * @param {ISaleReceiptCreatedPayload} payload -
    */
-  @OnEvent(events.saleReceipt.onCreated)
-  @OnEvent(events.saleReceipt.onClosed)
+  @OnEvent(events.saleReceipt.onCreated, { suppressErrors: false })
+  @OnEvent(events.saleReceipt.onClosed, { suppressErrors: false })
   public async handleWriteReceiptIncomeJournalEntrieOnCreate({
     saleReceiptId,
     saleReceipt,
@@ -34,7 +34,7 @@ export class SaleReceiptGLEntriesSubscriber {
    * Handles sale receipt revert jouranl entries once be deleted.
    * @param {ISaleReceiptEventDeletedPayload} payload -
    */
-  @OnEvent(events.saleReceipt.onDeleted)
+  @OnEvent(events.saleReceipt.onDeleted, { suppressErrors: false })
   public async handleRevertReceiptJournalEntriesOnDeleted({
     saleReceiptId,
     trx,
@@ -46,7 +46,7 @@ export class SaleReceiptGLEntriesSubscriber {
    * Handles writing sale receipt income journal entries once be edited.
    * @param {ISaleReceiptEditedPayload} payload -
    */
-  @OnEvent(events.saleReceipt.onEdited)
+  @OnEvent(events.saleReceipt.onEdited, { suppressErrors: false })
   public async handleWriteReceiptIncomeJournalEntrieOnEdited({
     saleReceipt,
     trx,

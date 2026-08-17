@@ -18,7 +18,7 @@ export class VendorsWriteGLOpeningSubscriber {
    * Writes the open balance journal entries once the vendor created.
    * @param {IVendorEventCreatedPayload} payload -
    */
-  @OnEvent(events.vendors.onCreated)
+  @OnEvent(events.vendors.onCreated, { suppressErrors: false })
   public async handleWriteOpeningBalanceEntries({
     vendor,
     trx,
@@ -36,7 +36,7 @@ export class VendorsWriteGLOpeningSubscriber {
    * Revert the opening balance journal entries once the vendor deleted.
    * @param {IVendorEventDeletedPayload} payload -
    */
-  @OnEvent(events.vendors.onDeleted)
+  @OnEvent(events.vendors.onDeleted, { suppressErrors: false })
   public async handleRevertOpeningBalanceEntries({
     vendorId,
     trx,
@@ -48,7 +48,7 @@ export class VendorsWriteGLOpeningSubscriber {
    * Handles the rewrite opening balance entries once opening balance changed.
    * @param {IVendorOpeningBalanceEditedPayload} payload -
    */
-  @OnEvent(events.vendors.onOpeningBalanceChanged)
+  @OnEvent(events.vendors.onOpeningBalanceChanged, { suppressErrors: false })
   public async handleRewriteOpeningEntriesOnChanged({
     vendor,
     trx,

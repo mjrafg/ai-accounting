@@ -23,7 +23,7 @@ export class BankingTransactionGLEntriesSubscriber {
    * Writes the journal entries once the cashflow transaction create.
    * @param {ICommandCashflowCreatedPayload} payload -
    */
-  @OnEvent(events.cashflow.onTransactionCreated)
+  @OnEvent(events.cashflow.onTransactionCreated, { suppressErrors: false })
   public async writeJournalEntriesOnceTransactionCreated({
     cashflowTransaction,
     trx,
@@ -50,7 +50,7 @@ export class BankingTransactionGLEntriesSubscriber {
    * Deletes the GL entries once the cashflow transaction deleted.
    * @param {ICommandCashflowDeletedPayload} payload -
    */
-  @OnEvent(events.cashflow.onTransactionDeleted)
+  @OnEvent(events.cashflow.onTransactionDeleted, { suppressErrors: false })
   public async revertGLEntriesOnceTransactionDeleted({
     cashflowTransactionId,
     trx,

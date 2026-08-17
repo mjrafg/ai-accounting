@@ -17,8 +17,8 @@ export class InvoiceGLEntriesSubscriber {
    * @param {ISaleInvoiceCreatedPayload} payload -
    * @returns {Promise<void>}
    */
-  @OnEvent(events.saleInvoice.onCreated)
-  @OnEvent(events.saleInvoice.onDelivered)
+  @OnEvent(events.saleInvoice.onCreated, { suppressErrors: false })
+  @OnEvent(events.saleInvoice.onDelivered, { suppressErrors: false })
   public async handleWriteJournalEntriesOnInvoiceCreated({
     saleInvoiceId,
     saleInvoice,
@@ -35,7 +35,7 @@ export class InvoiceGLEntriesSubscriber {
    * @param {ISaleInvoiceEditedPayload} payload -
    * @returns {Promise<void>}
    */
-  @OnEvent(events.saleInvoice.onEdited)
+  @OnEvent(events.saleInvoice.onEdited, { suppressErrors: false })
   public async handleRewriteJournalEntriesOnceInvoiceEdit({
     saleInvoice,
     trx,
@@ -54,7 +54,7 @@ export class InvoiceGLEntriesSubscriber {
    * @param {ISaleInvoiceDeletePayload} payload -
    * @returns {Promise<void>}
    */
-  @OnEvent(events.saleInvoice.onDeleted)
+  @OnEvent(events.saleInvoice.onDeleted, { suppressErrors: false })
   public async handleRevertingInvoiceJournalEntriesOnDelete({
     saleInvoiceId,
     trx,

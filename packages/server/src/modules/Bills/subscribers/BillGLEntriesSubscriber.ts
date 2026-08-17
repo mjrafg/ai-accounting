@@ -20,8 +20,8 @@ export class BillGLEntriesSubscriber {
    * Handles writing journal entries once bill created.
    * @param {IBillCreatedPayload} payload -
    */
-  @OnEvent(events.bill.onCreated)
-  @OnEvent(events.bill.onOpened)
+  @OnEvent(events.bill.onCreated, { suppressErrors: false })
+  @OnEvent(events.bill.onOpened, { suppressErrors: false })
   public async handlerWriteJournalEntriesOnCreate({
     bill,
     trx,
@@ -35,7 +35,7 @@ export class BillGLEntriesSubscriber {
    * Handles the overwriting journal entries once bill edited.
    * @param {IBillEditedPayload} payload -
    */
-  @OnEvent(events.bill.onEdited)
+  @OnEvent(events.bill.onEdited, { suppressErrors: false })
   public async handleOverwriteJournalEntriesOnEdit({
     bill,
     trx,
@@ -49,7 +49,7 @@ export class BillGLEntriesSubscriber {
    * Handles revert journal entries on bill deleted.
    * @param {IBIllEventDeletedPayload} payload -
    */
-  @OnEvent(events.bill.onDeleted)
+  @OnEvent(events.bill.onDeleted, { suppressErrors: false })
   public async handlerDeleteJournalEntries({
     oldBill,
     trx,

@@ -19,7 +19,7 @@ export class WriteBillTaxTransactionsSubscriber {
    * Writes the bill tax transactions on invoice created.
    * @param {ISaleInvoiceCreatingPaylaod}
    */
-  @OnEvent(events.bill.onCreated)
+  @OnEvent(events.bill.onCreated, { suppressErrors: false })
   async writeInvoiceTaxTransactionsOnCreated({
     bill,
     trx,
@@ -34,7 +34,7 @@ export class WriteBillTaxTransactionsSubscriber {
    * Rewrites the bill tax transactions on invoice edited.
    * @param {IBillEditedPayload} payload -
    */
-  @OnEvent(events.bill.onEdited)
+  @OnEvent(events.bill.onEdited, { suppressErrors: false })
   async rewriteInvoiceTaxTransactionsOnEdited({
     bill,
     trx,
@@ -51,7 +51,7 @@ export class WriteBillTaxTransactionsSubscriber {
    * Removes the invoice tax transactions on invoice deleted.
    * @param {IBIllEventDeletedPayload}
    */
-  @OnEvent(events.bill.onDeleted)
+  @OnEvent(events.bill.onDeleted, { suppressErrors: false })
   async removeInvoiceTaxTransactionsOnDeleted({
     oldBill,
     trx,

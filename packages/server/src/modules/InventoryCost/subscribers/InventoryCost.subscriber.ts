@@ -26,7 +26,9 @@ export class InventoryCostSubscriber {
    * Sync inventory items quantity once inventory transactions created.
    * @param {IInventoryTransactionsCreatedPayload} payload -
    */
-  @OnEvent(events.inventory.onInventoryTransactionsCreated)
+  @OnEvent(events.inventory.onInventoryTransactionsCreated, {
+    suppressErrors: false,
+  })
   async syncItemsQuantityOnceInventoryTransactionsCreated({
     inventoryTransactions,
     trx,
@@ -91,7 +93,9 @@ export class InventoryCostSubscriber {
   /**
    * Sync inventory items quantity once inventory transactions deleted.
    */
-  @OnEvent(events.inventory.onInventoryTransactionsDeleted)
+  @OnEvent(events.inventory.onInventoryTransactionsDeleted, {
+    suppressErrors: false,
+  })
   async syncItemsQuantityOnceInventoryTransactionsDeleted({
     oldInventoryTransactions,
     trx,

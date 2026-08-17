@@ -22,7 +22,7 @@ export class ExpensesWriteGLSubscriber {
    * Handles the writing journal entries once the expense created.
    * @param {IExpenseCreatedPayload} payload -
    */
-  @OnEvent(events.expenses.onCreated)
+  @OnEvent(events.expenses.onCreated, { suppressErrors: false })
   public async handleWriteGLEntriesOnceCreated({
     expense,
     trx,
@@ -37,7 +37,7 @@ export class ExpensesWriteGLSubscriber {
    * Handle writing expense journal entries once the expense edited.
    * @param {IExpenseEventEditPayload} payload -
    */
-  @OnEvent(events.expenses.onEdited)
+  @OnEvent(events.expenses.onEdited, { suppressErrors: false })
   public async handleRewriteGLEntriesOnceEdited({
     expenseId,
     expense,
@@ -54,7 +54,7 @@ export class ExpensesWriteGLSubscriber {
    * Reverts expense journal entries once the expense deleted.
    * @param {IExpenseEventDeletePayload} payload -
    */
-  @OnEvent(events.expenses.onDeleted)
+  @OnEvent(events.expenses.onDeleted, { suppressErrors: false })
   public async handleRevertGLEntriesOnceDeleted({
     expenseId,
     trx,
@@ -66,7 +66,7 @@ export class ExpensesWriteGLSubscriber {
    * Handles writing expense journal once the expense publish.
    * @param {IExpenseEventPublishedPayload} payload -
    */
-  @OnEvent(events.expenses.onPublished)
+  @OnEvent(events.expenses.onPublished, { suppressErrors: false })
   public async handleWriteGLEntriesOncePublished({
     expense,
     trx,

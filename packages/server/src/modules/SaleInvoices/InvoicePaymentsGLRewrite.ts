@@ -1,5 +1,4 @@
 import { Knex } from 'knex';
-import * as async from 'async';
 import { Inject, Injectable } from '@nestjs/common';
 import { PaymentReceivedGLEntries } from '../PaymentReceived/commands/PaymentReceivedGLEntries';
 import { TenantModelProxy } from '../System/models/TenantBaseModel';
@@ -34,14 +33,13 @@ export class InvoicePaymentsGLEntriesRewrite {
     paymentsIds: number[],
     trx?: Knex.Transaction,
   ) => {
-    // Initiate a new queue for accounts balance mutation.
-    const rewritePaymentGL = async.queue(this.rewritePaymentsGLEntriesTask, 10);
-
-    paymentsIds.forEach((paymentId: number) => {
-      rewritePaymentGL.push({ paymentId, trx });
-    });
-    if (paymentsIds.length > 0) {
-      await rewritePaymentGL.drain();
+    // Sequential and awaited on purpose. The previous `async.queue(..., 10)`
+    // drained with `queue.drain()`, which resolves even when a worker threw and
+    // had no `queue.error` handler, so a failed payment GL rewrite was silently
+    // swallowed and the invoice edit still reported success. All rewrites run
+    // on the same Knex transaction, so there was no real concurrency to lose.
+    for (const paymentId of paymentsIds) {
+      await this.rewritePaymentsGLEntriesTask({ paymentId, trx });
     }
   };
 
@@ -55,8 +53,11 @@ export class InvoicePaymentsGLEntriesRewrite {
     invoiceId: number,
     trx?: Knex.Transaction,
   ) => {
+    // Must read through the owning transaction: the invoice edit that triggers
+    // this rewrite has already mutated payment entries inside `trx`, and a read
+    // on a pooled connection would miss them and rewrite the wrong set.
     const invoicePaymentEntries = await this.paymentReceivedEntryModel()
-      .query()
+      .query(trx)
       .where('invoiceId', invoiceId);
 
     const paymentsIds = invoicePaymentEntries.map((e) => e.paymentReceiveId);

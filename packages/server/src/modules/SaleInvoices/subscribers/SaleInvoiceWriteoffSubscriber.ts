@@ -15,7 +15,7 @@ export class SaleInvoiceWriteoffSubscriber {
    * Write the written-off sale invoice journal entries.
    * @param {ISaleInvoiceWriteoffCreatePayload}
    */
-  @OnEvent(events.saleInvoice.onWrittenoff)
+  @OnEvent(events.saleInvoice.onWrittenoff, { suppressErrors: false })
   public async writeJournalEntriesOnceWriteoffCreate({
     saleInvoice,
     trx,
@@ -27,7 +27,7 @@ export class SaleInvoiceWriteoffSubscriber {
    * Reverts the written-of sale invoice jounral entries.
    * @param {ISaleInvoiceWrittenOffCanceledPayload}
    */
-  @OnEvent(events.saleInvoice.onWrittenoffCanceled)
+  @OnEvent(events.saleInvoice.onWrittenoffCanceled, { suppressErrors: false })
   public async revertJournalEntriesOnce({
     saleInvoice,
     trx,

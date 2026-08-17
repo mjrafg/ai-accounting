@@ -17,7 +17,7 @@ export class RefundVendorCreditGLEntriesSubscriber {
    * Writes refund vendor credit GL entries once the transaction created.
    * @param {IRefundVendorCreditCreatedPayload} payload -
    */
-  @OnEvent(events.vendorCredit.onRefundCreated)
+  @OnEvent(events.vendorCredit.onRefundCreated, { suppressErrors: false })
   async writeRefundVendorCreditGLEntriesOnceCreated({
     trx,
     refundVendorCredit,
@@ -33,7 +33,7 @@ export class RefundVendorCreditGLEntriesSubscriber {
    * Reverts refund vendor credit GL entries once the transaction deleted.
    * @param {IRefundVendorCreditDeletedPayload} payload -
    */
-  @OnEvent(events.vendorCredit.onRefundDeleted)
+  @OnEvent(events.vendorCredit.onRefundDeleted, { suppressErrors: false })
   async revertRefundVendorCreditGLEntriesOnceDeleted({
     trx,
     refundCreditId,
