@@ -341,6 +341,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (req.method === 'POST') {
       if (rateGate('write', ip)) return json(res, 429, { error: 'rate limited' });
       if (action === 'resume') {
+        const rec0 = deriveTask(events, taskId);
+        if (rec0?.state === 'ESCALATED') orch.retryFromEscalation(taskId, sess.user);
         orch.run(taskId).catch(() => undefined);
         return json(res, 200, { ok: true });
       }

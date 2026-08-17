@@ -585,12 +585,26 @@ export class Orchestrator {
 
   gateSummary(taskId: string): policy.GateSummary {
     const evs = this.events.read(taskId);
-    const tests = evs.filter((e) => e.type === 'TEST_RESULT').map((e) => e.payload as any);
+    // Only the LATEST result of each named check/test gates anything: a re-run
+    // after a fix supersedes its failure. Without this, one historical red
+    // check vetoed auto-merge forever. Merge/deploy-phase checks are outcomes
+    // of the operation itself, not preconditions, and are excluded.
+    const latest = (type: string) => {
+      const m = new Map<string, any>();
+      for (const e of evs) {
+        if (e.type !== type) continue;
+        if (e.phase === 'merge' || e.phase === 'deploy') continue;
+        const p = e.payload as any;
+        m.set(`${e.phase ?? ''}:${p.name}`, p);
+      }
+      return [...m.values()];
+    };
+    const tests = latest('TEST_RESULT');
     const findings = allFindings(this.events, taskId);
     const rel = this.releaseState();
     const backup = fs.existsSync('/srv/ai-accounting/backups/production/latest');
     return {
-      deterministicOk: evs.filter((e) => e.type === 'DETERMINISTIC_CHECK').every((e) => (e.payload as any).ok !== false),
+      deterministicOk: latest('DETERMINISTIC_CHECK').every((p) => p.ok !== false),
       testsOk: tests.length > 0 && tests.every((t) => t.ok),
       criticalOpen: policy.unresolvedCritical(findings).length,
       evidenceConflict: false,
@@ -627,6 +641,9 @@ export class Orchestrator {
       if (!fs.existsSync(MERGE_WT)) {
         g(['worktree', 'add', MERGE_WT, 'main'], this.repo);
       }
+      // Build support (node_modules links) so the post-merge typecheck can
+      // actually run; without it tsc "fails" in 10ms having never started.
+      this.wtm.provision(MERGE_WT);
       g(['fetch', 'origin', '--quiet'], MERGE_WT, true);
       g(['checkout', 'main'], MERGE_WT, true);
       // The merge worktree holds no local work; hard-sync to origin is safe here
@@ -695,6 +712,27 @@ export class Orchestrator {
   // -------------------------------------------------------------------------
   // Human decisions
   // -------------------------------------------------------------------------
+
+  /**
+   * Re-enters an escalated task at the last non-terminal state it held. The
+   * cause is expected to be fixed (or explicitly accepted) by the operator;
+   * the re-entry is recorded, never silent.
+   */
+  retryFromEscalation(taskId: string, by: string): boolean {
+    const rec = this.task(taskId);
+    if (!rec || rec.state !== 'ESCALATED') return false;
+    const evs = this.events.read(taskId);
+    let last: TaskState = 'DESIGN';
+    for (const e of evs) {
+      if (e.type === 'STATE_CHANGED') {
+        const to = (e.payload as any).to as TaskState;
+        if (!['ESCALATED', 'FAILED', 'CANCELLED', 'AWAITING_HUMAN'].includes(to)) last = to;
+      }
+    }
+    this.events.append({ taskId, type: 'NOTE', payload: { retryAuthorized: by, reenteringAt: last } });
+    this.setState(taskId, 'ESCALATED', last, 'retry', `by ${by}`);
+    return true;
+  }
 
   resolveHumanDecision(taskId: string, decisionId: string, choice: string, by: string): boolean {
     const rec = this.task(taskId);

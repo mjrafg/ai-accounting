@@ -70,7 +70,7 @@ export class WorktreeManager {
    * symlinked node_modules (pnpm virtual stores resolve via realpath) and a
    * copy of the disposable-test .env. All listed in the per-worktree exclude.
    */
-  private provision(dest: string): void {
+  provision(dest: string): void {
     const links = [
       'node_modules',
       'packages/server/node_modules',
