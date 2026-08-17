@@ -71,6 +71,16 @@ th,td{text-align:left;padding:6px 8px;border-top:1px solid var(--line)}th{color:
 .err{color:var(--bad);font-size:13px;min-height:18px}
 .center{max-width:380px;margin:10vh auto}
 pre.diff{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px;max-height:560px;overflow-y:auto}
+/* Persian report content: UI chrome stays English/LTR; the report itself is fa/RTL. */
+.fa-report{direction:rtl;text-align:right;unicode-bidi:plaintext;font-size:14.5px;line-height:2;font-family:Vazirmatn,Tahoma,"Segoe UI",system-ui,sans-serif}
+.fa-report h3{margin:16px 0 6px;font-size:15.5px}
+.fa-report p{margin:4px 0}
+.fa-report ul{margin:4px 0;padding-right:22px;padding-left:0}
+.ltr{direction:ltr;unicode-bidi:isolate;font-family:ui-monospace,Menlo,monospace;font-size:.9em;background:color-mix(in srgb,var(--line) 45%,transparent);border-radius:5px;padding:1px 5px;word-break:break-all}
+.stcard{border:1px solid var(--line);border-radius:10px;padding:12px;margin:10px 0;display:flex;gap:12px;align-items:flex-start}
+.stcard .ic{font-size:26px;line-height:1.2}
+.stcard.act{border-color:var(--warn)}
+.repmeta{color:var(--muted);font-size:12px;margin-top:10px}
 @media(max-width:560px){.kv{grid-template-columns:1fr}main{padding:12px 10px 54px}}
 </style>
 </head>
@@ -97,8 +107,9 @@ const $ = (t, attrs = {}, kids = []) => {
   for (const k of [].concat(kids)) if (k) el.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
   return el;
 };
+const freshRep = () => ({ current:null, history:[], busy:false, msg:"", auto:false, timer:null, delta:null, loaded:false });
 const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null, dep:null,
-  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false} };
+  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false}, rep: freshRep() };
 
 async function api(path, opts = {}) {
   const o = { headers: { "content-type": "application/json" }, ...opts };
@@ -177,9 +188,9 @@ function viewHome() {
   }
   if (state.legacy.length) {
     const g = $("div", { class: "card" }, [$("h2", { text: "V1 Legacy (read-only)" })]);
-    state.legacy.slice(0, 6).forEach(t => g.appendChild($("div", { class: "tile" }, [
+    state.legacy.slice(0, 6).forEach(t => g.appendChild($("div", { class: "tile", onclick: () => goLegacy(t.taskId) }, [
       $("div", {}, [$("div", { class:"t", text: t.taskId + " · " + t.title }),
-        $("div", { class:"m", text: "V1 LEGACY · " + t.events + " events" })]),
+        $("div", { class:"m", text: "V1 LEGACY · " + t.events + " events · click for Persian report" })]),
       $("span", { class: "pill s-idle", text: t.state }),
     ])));
     m.appendChild(g);
@@ -197,7 +208,21 @@ function tile(t) {
 }
 
 // ---- TASK -----------------------------------------------------------------
-function goTask(id) { state.view = "task"; state.taskId = id; state.tab = "live"; render(); loadTask(id); openStream(id); }
+function goTask(id) {
+  if (state.rep.timer) clearInterval(state.rep.timer);
+  state.rep = freshRep();
+  state.view = "task"; state.taskId = id; state.tab = "live"; render(); loadTask(id); openStream(id);
+}
+function goLegacy(id) {
+  if (state.rep.timer) clearInterval(state.rep.timer);
+  state.rep = freshRep();
+  if (state.es) { state.es.close(); state.es = null; }
+  state.view = "legacy"; state.taskId = id; render();
+  loadReports(id).then(() => {
+    if (state.rep.history.length) state.rep.current = state.rep.history[state.rep.history.length - 1];
+    render();
+  });
+}
 
 async function loadTask(id) {
   try { state.detail = await api("/api/v2/tasks/" + id); render(); } catch { /* transient */ }
@@ -229,6 +254,11 @@ function appendChunk(c) {
   const dot = document.getElementById("dot-" + key);
   if (dot) { dot.classList.add("on"); clearTimeout(dot._t); dot._t = setTimeout(() => dot.classList.remove("on"), 5000); }
   if (c.kind === "lifecycle" && /state:/.test(c.text)) loadTask(state.taskId);
+  if (c.kind === "report") loadReports(state.taskId).then(() => {
+    if (!state.rep.current && state.rep.history.length)
+      state.rep.current = state.rep.history[state.rep.history.length - 1];
+    if (state.tab === "report") render();
+  });
 }
 function matchesSearch(c) { return !state.search || c.text.toLowerCase().includes(state.search.toLowerCase()); }
 function chunkLine(c) {
@@ -281,7 +311,7 @@ function viewTask() {
   const tabs = $("div", { class: "tabs" });
   for (const tab of ["overview","live","design","findings","tests","evidence","diff","report"]) {
     const b = $("button", { text: tab[0].toUpperCase()+tab.slice(1), "aria-current": String(state.tab === tab) });
-    b.onclick = () => { state.tab = tab; render(); if (tab === "diff") loadDiff(); };
+    b.onclick = () => { state.tab = tab; render(); if (tab === "diff") loadDiff(); if (tab === "report") initReportTab(t.taskId); };
     tabs.appendChild(b);
   }
   m.appendChild(tabs);
@@ -486,20 +516,148 @@ function tabDiff() {
   return c;
 }
 
-function tabReport(t) {
-  const c = $("div",{class:"card"},[$("h2",{text:"Report"})]);
-  const lines = [
-    `${t.taskId} — ${t.title}`, ``,
-    `State: ${t.state}   Risk: ${t.risk}   Elapsed: ${dur(t.elapsedMs)}`,
-    `Base: ${t.baseSha}`, `HEAD: ${t.headSha}`,
-    ``, `Design revisions: ${(t.designRevisions||[]).length}`,
-    `Findings: ${(t.findings||[]).length} (${(t.findings||[]).filter(f=>f.severity==="CRITICAL").length} critical)`,
-    `Checks: ${(t.checks||[]).filter(x=>x.ok).length}/${(t.checks||[]).length} passing`,
-    t.merge ? `Merge: ${t.merge.ok ? "MERGED "+short(t.merge.mergeSha) : "failed — "+t.merge.detail}` : `Merge: not attempted`,
-    t.deploy ? `Deploy: ${t.deploy.ok ? "DEPLOYED "+short(t.deploy.deployedSha) : "failed — "+t.deploy.detail}` : `Deploy: not attempted`,
-  ];
-  c.appendChild($("pre",{class:"diff",text:lines.join("\n")}));
+// ---- PERSIAN REPORT -------------------------------------------------------
+// Buttons and chrome are English; report CONTENT is Persian RTL. The narrative
+// is plain text rendered via textContent only — never HTML. Technical tokens
+// arrive `backtick`-wrapped from the server and become isolated LTR spans.
+function faInline(parent, text) {
+  String(text).split("`").forEach((part, i) => {
+    if (!part) return;
+    if (i % 2) { parent.appendChild($("span", { class: "ltr", text: part })); return; }
+    part.split(/\*\*([^*]+)\*\*/).forEach((b, j) => {
+      if (b) parent.appendChild(j % 2 ? $("strong", { text: b }) : document.createTextNode(b));
+    });
+  });
+}
+function faBlock(md) {
+  const root = $("div", { class: "fa-report", lang: "fa", dir: "rtl" });
+  let ul = null;
+  for (const line of String(md).split("\n")) {
+    if (/^#{2,4}\s+/.test(line)) { ul = null; const h = $("h3"); faInline(h, line.replace(/^#+\s+/, "")); root.appendChild(h); }
+    else if (/^[-•]\s+/.test(line)) { if (!ul) { ul = $("ul"); root.appendChild(ul); } const li = $("li"); faInline(li, line.replace(/^[-•]\s+/, "")); ul.appendChild(li); }
+    else if (!line.trim()) ul = null;
+    else { ul = null; const pEl = $("p"); faInline(pEl, line); root.appendChild(pEl); }
+  }
+  return root;
+}
+async function loadReports(id) {
+  try { const j = await api(`/api/v2/tasks/${id}/reports`); state.rep.history = j.reports || []; } catch { /* transient */ }
+}
+function initReportTab(id) {
+  if (state.rep.loaded) return;
+  state.rep.loaded = true;
+  loadReports(id).then(() => {
+    if (!state.rep.current && state.rep.history.length)
+      state.rep.current = state.rep.history[state.rep.history.length - 1];
+    render();
+  });
+}
+async function genReport(id, action) {
+  if (state.rep.busy) return;
+  state.rep.busy = true;
+  state.rep.msg = action === "simplify" ? "Simplifying the same report…" : "Generating Persian report from the task's evidence…";
+  render();
+  try {
+    state.rep.current = await api(`/api/v2/tasks/${id}/reports/${action}`, { method: "POST", body: "{}" });
+    state.rep.delta = null; state.rep.msg = "";
+    await loadReports(id);
+  } catch (e) { state.rep.msg = "Error: " + e.message; }
+  state.rep.busy = false; render();
+}
+function showFull(id) {
+  const full = [...state.rep.history].reverse().find(r => r.identity.detailLevel === "NORMAL");
+  if (full) { state.rep.current = full; state.rep.delta = null; render(); }
+  else genReport(id, "persian");
+}
+async function loadDelta(id) {
+  try {
+    const j = await api(`/api/v2/tasks/${id}/reports/what-changed`, { method: "POST",
+      body: JSON.stringify({ sinceCursor: state.rep.current.identity.lastEventId }) });
+    state.rep.delta = j.text; render();
+  } catch (e) { alert(e.message); }
+}
+function toggleAuto(id, on) {
+  state.rep.auto = on;
+  if (state.rep.timer) { clearInterval(state.rep.timer); state.rep.timer = null; }
+  if (on) {
+    state.rep.timer = setInterval(() => {
+      if (state.view === "task" && state.tab === "report" && state.taskId === id && !state.rep.busy)
+        genReport(id, "persian"); // cache-hit (free) unless new events arrived
+    }, 60000);
+    genReport(id, "persian");
+  } else render();
+}
+function tabReport(t) { return reportPanel(t.taskId, false); }
+function reportPanel(taskId, legacy) {
+  const rp = state.rep;
+  const c = $("div", { class: "card" });
+  c.appendChild($("div", { class: "row" }, [
+    $("h2", { text: "Report", style: "margin:0" }),
+    legacy ? $("span", { class: "pill s-idle", text: "V1 LEGACY · RECONSTRUCTED" }) : null,
+  ]));
+  const row = $("div", { class: "row", style: "margin:10px 0" });
+  const btn = (label, fn, sec) => {
+    const b = $("button", { class: "btn" + (sec ? " sec" : ""), text: label });
+    b.disabled = rp.busy; b.onclick = fn; row.appendChild(b);
+  };
+  btn("Persian Report", () => genReport(taskId, "persian"));
+  btn("Simplify", () => genReport(taskId, "simplify"), true);
+  btn("Refresh Report", () => genReport(taskId, "refresh"), true);
+  if (rp.current && rp.current.identity.detailLevel === "SIMPLE") btn("Show Full Report", () => showFull(taskId), true);
+  if (!legacy && rp.current) btn("What Changed?", () => loadDelta(taskId), true);
+  if (!legacy) {
+    const cb = $("input", { type: "checkbox" });
+    cb.checked = rp.auto; cb.onchange = () => toggleAuto(taskId, cb.checked);
+    row.appendChild($("label", { style: "display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);cursor:pointer" },
+      [cb, "Auto Update"]));
+  }
+  c.appendChild(row);
+  if (rp.busy || rp.msg) c.appendChild($("div", { class: "sub", text: rp.msg || "Working…" }));
+
+  const r = rp.current;
+  if (!r) {
+    if (!rp.busy) c.appendChild($("p", { class: "sub",
+      text: "“Persian Report” explains everything this task has done so far, in Persian — available at any time, even while the task is running. “Simplify” retells the same report for a non-programmer." }));
+  } else {
+    const sc = r.statusCard || {};
+    c.appendChild($("div", { class: "stcard fa-report" + (sc.actionRequired ? " act" : ""), lang: "fa", dir: "rtl" }, [
+      $("span", { class: "ic", text: sc.icon || "🛈" }),
+      $("div", {}, [
+        $("div", { style: "font-weight:700;font-size:15px", text: sc.title || "" }),
+        $("div", { style: "margin-top:3px", text: sc.detail || "" }),
+        sc.actionExplanation ? $("div", { style: "margin-top:6px;white-space:pre-wrap", text: sc.actionExplanation }) : null,
+      ]),
+    ]));
+    if (rp.delta) c.appendChild($("div", { class: "stcard" }, [$("span", { class: "ic", text: "🔎" }), faBlock(rp.delta)]));
+    c.appendChild(faBlock(r.narrative));
+    c.appendChild($("div", { class: "repmeta", text:
+      `${r.identity.reportType} · ${r.identity.detailLevel} · events ≤ ${r.identity.lastEventId}` +
+      ` · generated ${fmt(r.identity.generatedAt)} · by ${r.generator}` +
+      (r.identity.legacy ? " · V1 LEGACY (reconstructed)" : "") }));
+  }
+  if (rp.history.length) {
+    const h = $("div", { style: "margin-top:14px" }, [$("h2", { text: "Report History" })]);
+    [...rp.history].reverse().slice(0, 12).forEach(rec => {
+      h.appendChild($("div", { class: "tile", onclick: () => { state.rep.current = rec; state.rep.delta = null; render(); } }, [
+        $("div", {}, [
+          $("div", { class: "t", text: `${rec.identity.reportType} · ${rec.identity.detailLevel}` }),
+          $("div", { class: "m", text: `${fmt(rec.identity.generatedAt)} · events ≤ ${rec.identity.lastEventId} · ${rec.generator}` }),
+        ]),
+        rec === rp.current ? $("span", { class: "pill s-ok", text: "SHOWN" }) : null,
+      ]));
+    });
+    c.appendChild(h);
+  }
   return c;
+}
+function viewLegacy() {
+  const m = $("div");
+  m.appendChild($("div", { class: "card" }, [
+    $("h1", { text: state.taskId }),
+    $("p", { class: "sub", text: "V1 legacy task — read-only. Reports are reconstructed from historical V1 evidence; V1 did not record everything V2 records." }),
+  ]));
+  m.appendChild(reportPanel(state.taskId, true));
+  return m;
 }
 
 function decisionCard(t) {
@@ -706,6 +864,7 @@ function render() {
   main.textContent = "";
   main.appendChild(
     state.view === "task" ? viewTask() :
+    state.view === "legacy" ? viewLegacy() :
     state.view === "obs" ? viewObservatory() :
     state.view === "system" ? viewSystem() : viewHome());
 }

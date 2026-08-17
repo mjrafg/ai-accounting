@@ -36,6 +36,25 @@ export function bannedKeysPresent(): string[] {
 const CLAUDE_BIN = process.env.AI_CLAUDE_BIN ?? '/home/aiaccounting/.local/bin/claude';
 const CODEX_BIN = process.env.AI_CODEX_BIN ?? '/home/aiaccounting/.nvm/versions/node/v18.16.1/bin/codex';
 
+/**
+ * Model policy: Claude Fable 5 is the preferred model for every Claude role
+ * (design, adjudication, implementation, report generation). Verified on this
+ * host: CLI 2.1.233 accepts --model claude-fable-5 and the result envelope's
+ * modelUsage confirms the effective model under the SUBSCRIPTION login — no
+ * API key involved. Codex stays the independent reviewer, never replaced.
+ */
+export const CLAUDE_MODEL = process.env.AI_V2_CLAUDE_MODEL ?? 'claude-fable-5';
+
+let cliVersionCache: string | null = null;
+export function claudeCliVersion(): string {
+  if (cliVersionCache) return cliVersionCache;
+  try {
+    const r = require('child_process').execFileSync(CLAUDE_BIN, ['--version'], { encoding: 'utf8', timeout: 15000 });
+    cliVersionCache = String(r).trim();
+  } catch { cliVersionCache = 'unknown'; }
+  return cliVersionCache!;
+}
+
 export type AgentName = 'claude' | 'codex' | 'claude-code';
 
 export interface AgentSpec {
@@ -48,6 +67,8 @@ export interface AgentSpec {
   readOnly?: boolean;
   taskId: string;
   phase: string;
+  /** Claude model override; defaults to CLAUDE_MODEL. Ignored for codex. */
+  model?: string;
 }
 
 function argvFor(spec: AgentSpec): string[] {
@@ -59,6 +80,7 @@ function argvFor(spec: AgentSpec): string[] {
     : ['Read', 'Grep', 'Glob', 'Bash'];
   return [
     CLAUDE_BIN, '-p', spec.prompt,
+    '--model', spec.model ?? CLAUDE_MODEL,
     '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
     '--permission-mode', spec.agent === 'claude-code' ? 'acceptEdits' : 'manual',
     '--allowed-tools', tools.join(' '),
@@ -67,6 +89,7 @@ function argvFor(spec: AgentSpec): string[] {
 
 interface StreamState {
   finalEnvelope: string | null;
+  effectiveModel: string | null;
   assistantTexts: string[];
   rateLimited: boolean;
   textBuf: string;
@@ -130,6 +153,9 @@ function ingestLine(
     }
     case 'stream_event': {
       const e = ev.event ?? {};
+      if (e.type === 'message_start' && ev?.event?.message?.model) {
+        st.effectiveModel = String(ev.event.message.model);
+      }
       if (e.type === 'content_block_delta') {
         const d = e.delta ?? {};
         if (d.type === 'text_delta' && typeof d.text === 'string') {
@@ -187,7 +213,7 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
   return new Promise((resolve) => {
     const argv = argvFor(spec);
     const started = Date.now();
-    const st: StreamState = { finalEnvelope: null, assistantTexts: [], rateLimited: false, textBuf: '', thinkingTokens: 0, firstChunkAt: null };
+    const st: StreamState = { finalEnvelope: null, effectiveModel: null, assistantTexts: [], rateLimited: false, textBuf: '', thinkingTokens: 0, firstChunkAt: null };
     const emit = (kind: string, text: string) => stream.append(spec.taskId, spec.agent, kind, text, spec.phase);
 
     stream.append(spec.taskId, spec.agent, 'lifecycle', `● started (${spec.phase})`, spec.phase);
@@ -260,6 +286,10 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
         attempts: 1,
         usage: null,
         firstChunkMs: st.firstChunkAt ? st.firstChunkAt - started : undefined,
+        requestedModel: spec.agent === 'codex' ? 'codex' : (spec.model ?? CLAUDE_MODEL),
+        effectiveModel: spec.agent === 'codex' ? 'codex' : (st.effectiveModel ?? undefined),
+        cliVersion: spec.agent === 'codex' ? undefined : claudeCliVersion(),
+        authMode: 'subscription-cli',
       });
     });
     child.on('error', (err) => {

@@ -19,6 +19,7 @@ import { bannedKeysPresent, BILLING_MODE } from './core/agents';
 import { mfaStatus, mfaBeginEnroll, mfaConfirmEnroll, mfaCheck } from './core/mfa';
 import { stageMinus1Lock, deployLock } from './core/checks';
 import { getDeploymentSettings, setAutomaticDeployment } from './core/settings';
+import { generateReport, listReports, whatChanged } from './core/report';
 import { TaskRecord } from './core/types';
 
 const HOST = process.env.AI_BIND_HOST ?? '172.17.0.1';
@@ -383,6 +384,34 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         return json(res, r.ok ? 200 : 409, r);
       }
     }
+  }
+
+  // ---- Persian reports (observational side-channel; V2 and V1-legacy) ----
+  // Narrow by construction: fixed actions over the canonical snapshot only —
+  // no free-form prompts and no shell reach the model from here.
+  const rm = /^\/api\/v2\/tasks\/(TASK(?:-V2)?-\d+)\/reports(?:\/([\w-]+))?$/.exec(p);
+  if (rm) {
+    const [, rTaskId, rAction] = rm;
+    if (req.method === 'GET' && !rAction) {
+      return json(res, 200, { reports: listReports(rTaskId) });
+    }
+    if (req.method === 'POST' && rAction) {
+      if (rateGate('write', ip)) return json(res, 429, { error: 'rate limited' });
+      if (['persian', 'simplify', 'refresh'].includes(rAction)) {
+        const level = rAction === 'simplify' ? 'SIMPLE' as const : 'NORMAL' as const;
+        // Refresh is the one explicit owner request to regenerate even when the
+        // evidence cursor is unchanged (e.g. to retry after a fallback report).
+        const r = await generateReport(events, rTaskId, level, { force: rAction === 'refresh' });
+        return r ? json(res, 200, r) : json(res, 404, { error: 'unknown task' });
+      }
+      if (rAction === 'what-changed') {
+        const body = await readBody(req);
+        const since = Number(body.sinceCursor);
+        if (!Number.isInteger(since) || since < 0) return json(res, 400, { error: 'sinceCursor (integer) is required' });
+        return json(res, 200, { text: whatChanged(events, rTaskId, since) });
+      }
+    }
+    return json(res, 404, { error: 'not found' });
   }
 
   // ---- Deployment settings (the ONLY setting the browser can write) ------

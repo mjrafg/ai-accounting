@@ -159,6 +159,10 @@ export interface AgentRunResult {
   attempts: number;
   usage?: { inputTokens?: number; outputTokens?: number } | null;
   firstChunkMs?: number;
+  requestedModel?: string;
+  effectiveModel?: string;
+  cliVersion?: string;
+  authMode?: string;
 }
 
 export interface CheckResult {

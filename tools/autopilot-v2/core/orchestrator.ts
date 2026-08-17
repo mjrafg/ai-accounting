@@ -21,6 +21,7 @@ import { WorktreeManager } from './worktrees';
 import * as checks from './checks';
 import * as policy from './policy';
 import { automaticDeploymentEnabled } from './settings';
+import { generateReport } from './report';
 
 const CONTROL_REPO = process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo';
 const DEPLOY_BIN = process.env.AI_DEPLOY_BIN ?? '/srv/ai-accounting/bin/deploy-production';
@@ -68,12 +69,30 @@ export class Orchestrator {
     extra: Record<string, unknown> = {}): void {
     this.events.append({ taskId, type: 'STATE_CHANGED', phase, subPhase, payload: { from, to, ...extra } });
     this.stream.append(taskId, 'system', 'lifecycle', `state: ${from} → ${to}${subPhase ? ` (${subPhase})` : ''}`, phase);
+    this.maybeAutoFinalReport(taskId, to);
+  }
+
+  /**
+   * Automatic Persian FINAL report on outcome states. Strictly fire-and-forget:
+   * report generation observes the event log and must never block or fail a task.
+   */
+  private maybeAutoFinalReport(taskId: string, to: TaskState): void {
+    const finals: TaskState[] = ['READY_TO_MERGE', 'MERGED', 'READY_TO_DEPLOY', 'DEPLOYED',
+      'FAILED', 'ESCALATED', 'CANCELLED'];
+    if (!finals.includes(to)) return;
+    setImmediate(() => {
+      generateReport(this.events, taskId, 'NORMAL').then((r) => {
+        if (r) this.stream.append(taskId, 'system', 'report',
+          `automatic Persian FINAL report generated (${r.generator}, ${r.generationMs}ms)`);
+      }).catch(() => { /* reporting must never affect the task */ });
+    });
   }
 
   cancel(taskId: string, by: string, reason: string): void {
     this.events.append({ taskId, type: 'TASK_CANCELLED', payload: { cancelledBy: by, reason } });
     this.stream.append(taskId, 'system', 'lifecycle', `cancelled: ${reason}`);
     this.running.delete(taskId);
+    this.maybeAutoFinalReport(taskId, 'CANCELLED');
   }
 
   isRunning(taskId: string): boolean { return this.running.has(taskId); }
@@ -95,6 +114,8 @@ export class Orchestrator {
         ok: res.ok, durationMs: res.durationMs, exitCode: res.exitCode,
         failureKind: res.failureKind ?? null, error: res.error ?? null,
         firstChunkMs: res.firstChunkMs ?? null, rateLimited: res.rateLimited,
+        requestedModel: res.requestedModel ?? null, effectiveModel: res.effectiveModel ?? null,
+        cliVersion: res.cliVersion ?? null, authMode: res.authMode ?? null,
       },
     });
     return res;

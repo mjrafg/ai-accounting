@@ -23,6 +23,11 @@ import {
 import * as policy from './core/policy';
 import { totp, verifyTotp, base32Encode } from './core/mfa';
 import { getDeploymentSettings, setAutomaticDeployment, automaticDeploymentEnabled } from './core/settings';
+import { CLAUDE_MODEL } from './core/agents';
+import {
+  buildSnapshot, statusCard, deterministicPersian, generateReport, generateDeterministic,
+  listReports, whatChanged,
+} from './core/report';
 import { Finding } from './core/types';
 
 let passed = 0, failed = 0;
@@ -342,6 +347,116 @@ async function main(): Promise<number> {
 
     setAutomaticDeployment(false, 'selftest-owner'); // leave the fixture OFF
     if (prevEnv === undefined) delete process.env.AI_V2_HOLD_DEPLOY; else process.env.AI_V2_HOLD_DEPLOY = prevEnv;
+  }
+
+  // ---- Persian reporting --------------------------------------------------
+  section('Persian reporting: snapshot, fallback, cache, simplify invariants');
+  {
+    process.env.AI_V2_REPORT_DISABLE_LLM = '1'; // never call a model from tests
+    const ev = new EventStore();
+    const id = 'TASK-V2-9101';
+    const HEAD = 'aabbccdd112233445566';
+    ev.append({ taskId: id, type: 'TASK_CREATED', payload: { title: 'fix rounding', description: 'Fix invoice rounding', risk: 'medium', branch: 'ai/task-v2-9101', baseSha: 'b1b1b1b1b', worktree: '/w' } });
+    ev.append({ taskId: id, type: 'STATE_CHANGED', payload: { from: 'NEW', to: 'DESIGN' } });
+    ev.append({ taskId: id, type: 'AGENT_STARTED', agent: 'claude', phase: 'design', payload: {} });
+    ev.append({ taskId: id, type: 'AGENT_FINISHED', agent: 'claude', phase: 'design', payload: {
+      ok: true, durationMs: 1000, requestedModel: 'claude-fable-5', effectiveModel: 'claude-fable-5',
+      cliVersion: '2.1.233', authMode: 'subscription-cli' } });
+    ev.append({ taskId: id, type: 'STATE_CHANGED', payload: { from: 'DESIGN', to: 'IMPLEMENT' } });
+    ev.append({ taskId: id, type: 'CODE_CHANGE', payload: { headSha: HEAD, filesChanged: ['packages/server/src/a.ts'] } });
+    ev.append({ taskId: id, type: 'TEST_RESULT', payload: { tier: 'targeted', name: 'a.spec', ok: true, detail: '4 passed' } });
+    ev.append({ taskId: id, type: 'DETERMINISTIC_CHECK', phase: 'verify', payload: { name: 'perDocumentReconciliation', ok: true, detail: '6/6 balanced' } });
+    ev.append({ taskId: id, type: 'EVIDENCE', payload: { verified: ['targeted tests pass'], notVerified: ['load under 10k invoices'] } });
+
+    const s1 = buildSnapshot(ev, id).snapshot;
+    check('snapshot cursor equals last event seq', s1.cursor === ev.read(id).length);
+    check('snapshot carries head/base/branch', s1.headSha === HEAD && s1.branch === 'ai/task-v2-9101');
+    check('snapshot carries model observability from agent events',
+      s1.agents.some((a: any) => a.effectiveModel === 'claude-fable-5' && a.authMode === 'subscription-cli'));
+
+    // running report: CURRENT, Persian, technical tokens LTR-wrapped
+    const r1 = await generateReport(ev, id, 'NORMAL');
+    check('report generated for a RUNNING task', r1 !== null && r1!.identity.reportType === 'CURRENT');
+    check('fallback generator used when model disabled', r1!.generator === 'deterministic-fallback');
+    check('language/detail metadata recorded', r1!.identity.language === 'fa' && r1!.identity.detailLevel === 'NORMAL');
+    check('narrative is Persian', /[؀-ۿ]/.test(r1!.narrative));
+    check('technical identifiers kept as LTR backtick tokens', r1!.narrative.includes('`' + 'ai/task-v2-9101' + '`'));
+    check('running report includes pending work', r1!.narrative.includes('باقی مانده'));
+    check('requested model recorded on report', r1!.requestedModel === CLAUDE_MODEL);
+    check('status card says in-progress with no action', r1!.statusCard.icon === '⏳' && !r1!.statusCard.actionRequired);
+
+    // cache: same head + cursor + level → same stored report, no regeneration
+    const r2 = await generateReport(ev, id, 'NORMAL');
+    check('identical evidence returns the cached report', r2!.identity.generatedAt === r1!.identity.generatedAt);
+    check('history stored on disk', listReports(id).length === 1);
+
+    // simplify: SAME snapshot, four questions, facts preserved
+    const rs = await generateReport(ev, id, 'SIMPLE');
+    check('simplify built from the same cursor', rs!.identity.lastEventId === r1!.identity.lastEventId);
+    check('simplify starts with the four questions',
+      rs!.narrative.includes('چه کاری انجام شد؟') && rs!.narrative.includes('آیا موفق شد؟') &&
+      rs!.narrative.includes('الان وضعیت چیست؟') && rs!.narrative.includes('آیا من باید کاری انجام بدهم؟'));
+
+    // new event invalidates the cache
+    ev.append({ taskId: id, type: 'STATE_CHANGED', payload: { from: 'IMPLEMENT', to: 'VERIFY' } });
+    const r3 = await generateReport(ev, id, 'NORMAL');
+    check('new event → new cursor → cache miss', r3!.identity.lastEventId === r1!.identity.lastEventId + 1);
+    check('no events beyond cursor in snapshot', buildSnapshot(ev, id).snapshot.cursor === ev.read(id).length);
+
+    // whatChanged delta
+    const delta = whatChanged(ev, id, r1!.identity.lastEventId);
+    check('what-changed reports only post-cursor events', delta.includes('1 رویداد') || delta.includes('رویداد جدید'));
+    check('what-changed on latest cursor says nothing new',
+      whatChanged(ev, id, ev.read(id).length).includes('رویداد جدیدی ثبت نشده'));
+
+    // simplify invariants on a FAILED task with CRITICAL finding — never hidden
+    const fid = 'TASK-V2-9102';
+    ev.append({ taskId: fid, type: 'TASK_CREATED', payload: { title: 'x', description: 'x', risk: 'high', branch: 'ai/x', baseSha: 'c2c2c2c2c', worktree: '/w' } });
+    ev.append({ taskId: fid, type: 'FINDING', agent: 'codex', payload: { findings: [{ findingId: 'C-1', severity: 'CRITICAL', category: 'correctness', claim: 'double posting', scenario: 'concrete scenario', status: 'UNRESOLVED' }] } });
+    ev.append({ taskId: fid, type: 'NOTE', payload: { lastError: 'stage0 regressions' } });
+    ev.append({ taskId: fid, type: 'STATE_CHANGED', payload: { from: 'VERIFY', to: 'FAILED' } });
+    const rf = generateDeterministic(ev, fid, 'SIMPLE')!;
+    check('FAILED simplify says NO (خیر) honestly', rf.narrative.includes('خیر'));
+    check('simplify never hides CRITICAL findings', rf.narrative.includes('CRITICAL'));
+    check('final state → FINAL report type', rf.identity.reportType === 'FINAL');
+    check('FAILED status card demands attention', rf.statusCard.icon === '❌' && rf.statusCard.actionRequired);
+
+    // AWAITING_HUMAN status card carries the decision
+    const hid = 'TASK-V2-9103';
+    ev.append({ taskId: hid, type: 'TASK_CREATED', payload: { title: 'h', description: 'h', risk: 'high', branch: 'ai/h', baseSha: 'd3d3d3d3d', worktree: '/w' } });
+    ev.append({ taskId: hid, type: 'STATE_CHANGED', payload: { from: 'FINAL_ACCEPTANCE', to: 'AWAITING_HUMAN',
+      awaiting: { decisionId: 'D-1', issue: 'baseline drift', whyAutomationStopped: 'critical trigger', evidence: [],
+        recommendedAction: 'approve baseline', whyRecommended: '', alternatives: [], riskIfApproved: '', riskIfRejected: '' } } });
+    const rh = generateDeterministic(ev, hid, 'NORMAL')!;
+    check('AWAITING_HUMAN card asks for the owner decision',
+      rh.statusCard.icon === '⚠️' && rh.statusCard.actionRequired &&
+      (rh.statusCard.actionExplanation ?? '').includes('baseline drift'));
+
+    // secret redaction on the way out
+    const sid = 'TASK-V2-9104';
+    ev.append({ taskId: sid, type: 'TASK_CREATED', payload: { title: 'sk-ant-verysecrettoken12345 leak', description: 'd', risk: 'low', branch: 'ai/s', baseSha: 'e4e4e4e4e', worktree: '/w' } });
+    const rsec = generateDeterministic(ev, sid, 'NORMAL')!;
+    check('secrets never reach the report output', !rsec.narrative.includes('sk-ant-verysecret'));
+
+    // V1 legacy: reconstructed and labeled
+    const v1root = path.join(TMP, 'v1-state');
+    fs.mkdirSync(path.join(v1root, 'tasks', 'TASK-0042'), { recursive: true });
+    fs.writeFileSync(path.join(v1root, 'tasks', 'TASK-0042', 'events.jsonl'), [
+      JSON.stringify({ type: 'TASK_CREATED', ts: '2026-08-01T00:00:00Z', payload: { title: 'legacy fix', risk: 'low', branch: 'ai/legacy', baseRef: 'origin/main' } }),
+      JSON.stringify({ type: 'STATE_TRANSITION', ts: '2026-08-01T01:00:00Z', payload: { from: 'DESIGN', to: 'IMPLEMENT' } }),
+    ].join('\n') + '\n');
+    process.env.AI_V1_STATE = v1root;
+    const rl = generateDeterministic(ev, 'TASK-0042', 'NORMAL');
+    check('V1 legacy task produces a report', rl !== null);
+    check('legacy report explicitly labeled reconstructed',
+      rl!.identity.legacy === true && rl!.narrative.includes('V1'));
+    delete process.env.AI_V1_STATE;
+
+    // model policy
+    check('default Claude model policy is claude-fable-5', CLAUDE_MODEL === 'claude-fable-5');
+    check('no paid API key present in test environment',
+      !process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY);
+    delete process.env.AI_V2_REPORT_DISABLE_LLM;
   }
 
   console.log(`\nV2 self-tests: ${passed} passed, ${failed} failed`);
