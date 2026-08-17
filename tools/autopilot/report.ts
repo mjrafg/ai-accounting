@@ -185,6 +185,7 @@ function counters(log: AutopilotEvent[]): string[] {
     `evidence conflicts: ${runtimeOverrules}`,
     `known evidence gaps: ${gaps}`,
     `explicitly deferred items: ${deferred}`,
+    `rate-limit pauses: ${log.filter((e) => e.type === 'PAUSED_RATE_LIMIT').length}`,
   ];
 }
 
@@ -215,6 +216,8 @@ function summarize(e: AutopilotEvent): string {
       return String(p.verdict);
     case 'DEFERRED':
       return `${p.what} — ${p.why}`;
+    case 'PAUSED_RATE_LIMIT':
+      return `${p.provider} quota reached; paused from ${p.pausedFrom} (no API fallback)`;
     case 'ESCALATION':
       return String(p.reason);
     case 'READY_TO_MERGE':

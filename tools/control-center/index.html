@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Development Control Center</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#12151a; --muted:#5b6472; --line:#e3e7ec;
+  --accent:#2f6df6; --ok:#0f8a4f; --warn:#b06a00; --bad:#c0392b; --pend:#9aa4b2;
+  --radius:14px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e1116;--panel:#161a21;--ink:#e8ecf2;--muted:#96a0b0;--line:#252b35;
+        --accent:#5b8dff;--ok:#3ecf8e;--warn:#e0a33e;--bad:#ff6b5e;--pend:#5a6474;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+     -webkit-font-smoothing:antialiased}
+header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);
+       padding:env(safe-area-inset-top) 0 0}
+.hrow{display:flex;align-items:center;gap:12px;padding:12px 16px;max-width:1100px;margin:0 auto;flex-wrap:wrap}
+.brand{font-weight:650;letter-spacing:-.01em}
+.envtag{font-size:11px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;
+        padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--muted);font:inherit;font-size:14px;padding:7px 11px;
+           border-radius:9px;cursor:pointer}
+nav button[aria-current="true"]{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:600}
+main{max-width:1100px;margin:0 auto;padding:18px 16px 64px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+h1{font-size:19px;margin:0 0 4px} h2{font-size:15px;margin:0 0 10px} h3{font-size:13px;margin:14px 0 6px;color:var(--muted);
+   text-transform:uppercase;letter-spacing:.05em}
+p.sub{color:var(--muted);margin:0 0 14px;font-size:14px}
+textarea,input,select{width:100%;font:inherit;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+textarea{min-height:96px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:11px 16px;font:inherit;
+     font-weight:600;cursor:pointer}
+.btn.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn:disabled{opacity:.55;cursor:default}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{background:transparent;border:0;padding:9px 15px;font:inherit;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff;font-weight:600}
+.pill{font-size:11px;font-weight:650;letter-spacing:.04em;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.s-run{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
+.s-ok{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.s-warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.s-bad{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad)}
+.s-idle{background:color-mix(in srgb,var(--pend) 18%,transparent);color:var(--muted)}
+.tile{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:13px 0;border-top:1px solid var(--line);cursor:pointer}
+.tile:first-of-type{border-top:0}
+.tile .t{font-weight:600}
+.tile .m{color:var(--muted);font-size:13px}
+.bar{height:6px;background:var(--line);border-radius:999px;overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;background:var(--accent)}
+ol.tl{list-style:none;margin:0;padding:0}
+ol.tl li{display:flex;gap:10px;align-items:center;padding:7px 0;font-size:14px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--pend);flex:none}
+.dot.done{background:var(--ok)} .dot.running{background:var(--accent)}
+.kv{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:6px 14px;font-size:14px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;word-break:break-word}
+ul.ev{list-style:none;margin:0;padding:0}
+ul.ev li{padding:6px 0;border-top:1px solid var(--line);font-size:13.5px;display:flex;gap:10px}
+ul.ev li:first-child{border-top:0}
+ul.ev time{color:var(--muted);flex:none;font-variant-numeric:tabular-nums}
+.vlist{list-style:none;margin:0;padding:0;font-size:14px}
+.vlist li{padding:4px 0 4px 22px;position:relative}
+.vlist li::before{position:absolute;left:0;top:4px}
+.vlist.yes li::before{content:"✓";color:var(--ok)}
+.vlist.no li::before{content:"○";color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:7px 8px;border-top:1px solid var(--line)}
+th{color:var(--muted);font-weight:600}
+.scroll{overflow-x:auto}
+.note{font-size:13px;color:var(--muted);background:color-mix(in srgb,var(--warn) 9%,transparent);
+      border:1px solid color-mix(in srgb,var(--warn) 28%,transparent);padding:10px 12px;border-radius:10px}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:14px}
+.finding{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:9px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.center{max-width:400px;margin:9vh auto}
+.err{color:var(--bad);font-size:13.5px;min-height:19px}
+@media(max-width:520px){.hrow{padding:10px 12px}main{padding:14px 12px 60px}.kv{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div class="hrow">
+  <span class="brand">AI Development</span>
+  <span class="envtag" id="envtag">—</span>
+  <nav id="nav"></nav>
+</div></header>
+<main id="main"><div class="empty">Loading…</div></main>
+
+<script>
+"use strict";
+// Every value from the server is agent-influenced and therefore untrusted.
+// Nothing here ever assigns innerHTML; all text goes through textContent.
+const $ = (t, attrs = {}, kids = []) => {
+  const el = document.createElement(t);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = String(v);
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, String(v));
+  }
+  for (const k of [].concat(kids)) if (k) el.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
+  return el;
+};
+const state = { csrf: null, view: "home", taskId: null, tasks: [], sys: null, metrics: null, env: "" };
+
+async function api(path, opts = {}) {
+  const o = { headers: { "content-type": "application/json" }, ...opts };
+  if (opts.body && state.csrf) o.headers["x-csrf-token"] = state.csrf;
+  const r = await fetch(path, o);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("request failed: " + r.status));
+  return j;
+}
+
+const STATE_CLASS = s =>
+  ["READY_TO_MERGE","MERGED"].includes(s) ? "s-ok" :
+  ["ESCALATED","FAILED"].includes(s) ? "s-bad" :
+  s === "PAUSED_RATE_LIMIT" ? "s-warn" :
+  ["NEW","CANCELLED"].includes(s) ? "s-idle" : "s-run";
+const fmt = t => { try { return new Date(t).toLocaleString(); } catch { return String(t); } };
+const hhmm = t => { try { return new Date(t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); } catch { return ""; } };
+
+// ---- views ---------------------------------------------------------------
+
+function taskTile(t) {
+  return $("div", { class: "tile", onclick: () => go("task", t.taskId) }, [
+    $("div", {}, [
+      $("div", { class: "t", text: t.taskId + " · " + t.title }),
+      $("div", { class: "m", text: `${t.risk} risk · ${t.progress}% · updated ${fmt(t.updatedAt)}` }),
+    ]),
+    $("span", { class: "pill " + STATE_CLASS(t.state), text: t.state.replace(/_/g, " ") }),
+  ]);
+}
+
+function viewHome() {
+  const m = $("div");
+  const composer = $("div", { class: "card" });
+  composer.appendChild($("h1", { text: "What do you want the AI team to do?" }));
+  composer.appendChild($("p", { class: "sub", text: "Describe it in plain language. The orchestrator handles design, independent review, implementation, tests and acceptance." }));
+  const ta = $("textarea", { placeholder: "e.g. Investigate why payment balances sometimes become stale.", id: "composer" });
+  composer.appendChild(ta);
+  let risk = "high";
+  const seg = $("div", { class: "seg" });
+  ["low", "medium", "high"].forEach(r => {
+    const b = $("button", { type: "button", text: r[0].toUpperCase() + r.slice(1), "aria-pressed": String(r === risk) });
+    b.onclick = () => { risk = r; [...seg.children].forEach(c => c.setAttribute("aria-pressed", String(c === b))); };
+    seg.appendChild(b);
+  });
+  const err = $("div", { class: "err" });
+  const go1 = $("button", { class: "btn", text: "Start task" });
+  go1.onclick = async () => {
+    err.textContent = "";
+    if (!ta.value.trim()) { err.textContent = "Describe the task first."; return; }
+    go1.disabled = true; go1.textContent = "Starting…";
+    try {
+      const r = await api("/api/tasks", { method: "POST", body: JSON.stringify({ title: ta.value.trim(), risk }) });
+      ta.value = "";
+      await refresh();
+      if (r.taskId) go("task", r.taskId);
+    } catch (e) { err.textContent = e.message; }
+    go1.disabled = false; go1.textContent = "Start task";
+  };
+  composer.appendChild($("div", { class: "row", style: "margin-top:12px" }, [$("span", { class: "m", text: "Risk" }), seg, go1]));
+  composer.appendChild(err);
+  m.appendChild(composer);
+
+  const groups = [
+    ["Running", t => !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state)],
+    ["Ready to merge", t => t.state === "READY_TO_MERGE"],
+    ["Escalated", t => t.state === "ESCALATED" || t.state === "FAILED"],
+    ["Recently completed", t => t.state === "MERGED" || t.state === "CANCELLED"],
+  ];
+  for (const [label, pred] of groups) {
+    const items = state.tasks.filter(pred);
+    if (!items.length) continue;
+    const c = $("div", { class: "card" }, [$("h2", { text: label })]);
+    items.slice(0, 8).forEach(t => c.appendChild(taskTile(t)));
+    m.appendChild(c);
+  }
+  if (!state.tasks.length) m.appendChild($("div", { class: "card" }, [$("div", { class: "empty", text: "No tasks yet. Describe one above to get started." })]));
+
+  if (state.sys) {
+    const s = state.sys;
+    m.appendChild($("div", { class: "card" }, [
+      $("h2", { text: "System" }),
+      $("dl", { class: "kv" }, [
+        $("dt", { text: "Claude" }), $("dd", { text: s.claude }),
+        $("dt", { text: "Codex" }), $("dd", { text: s.codex }),
+        $("dt", { text: "Billing" }), $("dd", { text: s.billingMode + (s.paidApiKeys.length ? " — PAID KEYS PRESENT: " + s.paidApiKeys.join(", ") : " (no paid API keys)") }),
+        $("dt", { text: "Autopilot env" }), $("dd", { text: s.environment }),
+        $("dt", { text: "Accounting app" }), $("dd", { text: s.accountingUrl + " → HTTP " + s.accountingHttp }),
+      ]),
+    ]));
+  }
+  return m;
+}
+
+function viewTasks() {
+  const m = $("div");
+  const c = $("div", { class: "card" }, [$("h1", { text: "Tasks" })]);
+  const filt = $("select");
+  ["all","running","READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED","PAUSED_RATE_LIMIT"]
+    .forEach(v => filt.appendChild($("option", { value: v, text: v === "all" ? "All statuses" : v.replace(/_/g," ").toLowerCase() })));
+  const list = $("div");
+  const draw = () => {
+    list.textContent = "";
+    const v = filt.value;
+    const items = state.tasks.filter(t => v === "all" ? true
+      : v === "running" ? !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state)
+      : t.state === v);
+    if (!items.length) list.appendChild($("div", { class: "empty", text: "Nothing matches this filter." }));
+    items.forEach(t => list.appendChild(taskTile(t)));
+  };
+  filt.onchange = draw;
+  c.appendChild(filt); c.appendChild(list); draw();
+  m.appendChild(c);
+  return m;
+}
+
+function viewTask(t) {
+  const m = $("div");
+  if (!t) { m.appendChild($("div", { class: "card" }, [$("div", { class: "empty", text: "Task not found." })])); return m; }
+
+  const head = $("div", { class: "card" });
+  head.appendChild($("div", { class: "row" }, [
+    $("h1", { text: t.taskId + " · " + t.title, style: "flex:1" }),
+    $("span", { class: "pill " + STATE_CLASS(t.state), text: t.state.replace(/_/g, " ") }),
+  ]));
+  head.appendChild($("div", { class: "bar" }, [$("i", { style: "width:" + t.progress + "%" })]));
+  if (t.reconstructed) head.appendChild($("div", { class: "note", style: "margin-top:10px", text: "Reconstructed history — rebuilt from git and prior reports, not observed live." }));
+  if (t.simulated) head.appendChild($("div", { class: "note", style: "margin-top:10px", text: "Simulated run — fixture replay, not a live model. Cannot certify a merge." }));
+  head.appendChild($("dl", { class: "kv", style: "margin-top:12px" }, [
+    $("dt", { text: "Risk" }), $("dd", { text: t.risk }),
+    $("dt", { text: "Branch" }), $("dd", { class: "mono", text: t.branch }),
+    $("dt", { text: "Created" }), $("dd", { text: fmt(t.createdAt) }),
+    $("dt", { text: "Review rounds" }), $("dd", { text: String(t.reviewRounds) }),
+    $("dt", { text: "Commits" }), $("dd", { class: "mono", text: t.commits.length ? t.commits.map(c => String(c).slice(0, 9)).join(", ") : "none recorded" }),
+    $("dt", { text: "Files changed" }), $("dd", { text: t.filesChanged.length ? t.filesChanged.join(", ") : "none recorded" }),
+  ]));
+  const acts = $("div", { class: "row", style: "margin-top:12px" });
+  const act = (label, path, cls) => {
+    const b = $("button", { class: "btn " + (cls || "sec"), text: label });
+    b.onclick = async () => {
+      b.disabled = true;
+      try { const r = await api("/api/tasks/" + t.taskId + "/" + path, { method: "POST", body: "{}" });
+            if (r.error) alert(r.error); } catch (e) { alert(e.message); }
+      b.disabled = false; refresh();
+    };
+    return b;
+  };
+  const active = !["READY_TO_MERGE","MERGED","ESCALATED","FAILED","CANCELLED"].includes(t.state);
+  if (active) { acts.appendChild(act("Pause", "pause")); acts.appendChild(act("Cancel", "cancel")); }
+  else acts.appendChild(act("Resume", "resume"));
+  if (t.state === "READY_TO_MERGE") acts.appendChild(act("Approve merge", "approve-merge", ""));
+  head.appendChild(acts);
+  m.appendChild(head);
+
+  if (t.escalation.length) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Escalated — needs a human decision" })]);
+    t.escalation.forEach(r => c.appendChild($("div", { class: "note", style: "margin-bottom:8px", text: r })));
+    m.appendChild(c);
+  }
+  if (t.pauses.length) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Paused on subscription quota" })]);
+    t.pauses.forEach(p => c.appendChild($("div", { class: "note", style: "margin-bottom:8px",
+      text: `${p.provider}: ${p.note || "quota reached"} (paused from ${p.pausedFrom})` })));
+    m.appendChild(c);
+  }
+
+  const tl = $("div", { class: "card" }, [$("h2", { text: "Workflow" })]);
+  const ol = $("ol", { class: "tl" });
+  t.timeline.forEach(s => ol.appendChild($("li", {}, [
+    $("span", { class: "dot " + s.status }), $("span", { text: s.label }),
+    $("span", { class: "m", style: "margin-left:auto", text: s.status }),
+  ])));
+  tl.appendChild(ol); m.appendChild(tl);
+
+  if (t.findings.length) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Findings" })]);
+    t.findings.forEach(f => {
+      const box = $("div", { class: "finding" });
+      box.appendChild($("div", { class: "row" }, [
+        $("span", { class: "pill " + (f.severity === "BLOCKER" ? "s-bad" : f.severity === "MAJOR" ? "s-warn" : "s-idle"), text: f.severity }),
+        $("span", { class: "m", text: f.category || "" }),
+        $("span", { class: "pill " + (f.verdict === "CONFIRMED" ? "s-ok" : f.verdict === "REJECTED" ? "s-idle" : "s-warn"), style: "margin-left:auto", text: f.verdict }),
+      ]));
+      box.appendChild($("div", { style: "margin-top:7px;font-weight:600", text: f.claim || "" }));
+      box.appendChild($("dl", { class: "kv", style: "margin-top:7px" }, [
+        $("dt", { text: "File" }), $("dd", { class: "mono", text: f.file || "—" }),
+        $("dt", { text: "Scenario" }), $("dd", { text: f.scenario || "—" }),
+        $("dt", { text: "Invariant" }), $("dd", { text: f.violatedInvariant || "—" }),
+        $("dt", { text: "Confidence" }), $("dd", { text: f.confidence || "—" }),
+        $("dt", { text: "Required fix" }), $("dd", { text: f.requiredFix || "—" }),
+      ]));
+      c.appendChild(box);
+    });
+    m.appendChild(c);
+  }
+
+  if (t.tests.length) {
+    const c = $("div", { class: "card" }, [$("h2", { text: "Tests" })]);
+    const tb = $("table");
+    tb.appendChild($("tr", {}, [["Suite","Tier","Exit","Passed","Failed","Skipped","Result"].map(h => $("th", { text: h }))].flat()));
+    t.tests.forEach(x => tb.appendChild($("tr", {}, [
+      $("td", { class: "mono", text: x.name }), $("td", { text: x.tier }), $("td", { text: String(x.exitCode) }),
+      $("td", { text: String(x.passed) }), $("td", { text: String(x.failed) }), $("td", { text: String(x.skipped) }),
+      $("td", {}, [$("span", { class: "pill " + (x.ok ? "s-ok" : "s-bad"), text: x.ok ? "PASS" : "BLOCKED" })]),
+    ])));
+    c.appendChild($("div", { class: "scroll" }, [tb]));
+    m.appendChild(c);
+  }
+
+  // Mandatory on every task: both halves, always.
+  const ev = $("div", { class: "card" }, [$("h2", { text: "Evidence" })]);
+  ev.appendChild($("h3", { text: "Verified" }));
+  if (t.verified.length) { const u = $("ul", { class: "vlist yes" }); t.verified.forEach(v => u.appendChild($("li", { text: v }))); ev.appendChild(u); }
+  else ev.appendChild($("div", { class: "m", text: "Nothing verified yet." }));
+  ev.appendChild($("h3", { text: "Not verified / out of scope" }));
+  if (t.notVerified.length) { const u = $("ul", { class: "vlist no" }); t.notVerified.forEach(v => u.appendChild($("li", { text: v }))); ev.appendChild(u); }
+  else ev.appendChild($("div", { class: "m", text: "No acceptance run has declared its limits yet." }));
+  m.appendChild(ev);
+
+  const lg = $("div", { class: "card" }, [$("h2", { text: "Event log (" + t.eventCount + ")" })]);
+  const ul = $("ul", { class: "ev" });
+  t.log.slice(-60).forEach(e => ul.appendChild($("li", {}, [
+    $("time", { text: hhmm(e.ts) }),
+    $("span", {}, [$("strong", { text: e.type.replace(/_/g, " ").toLowerCase() + " " }), document.createTextNode(e.summary || "")]),
+  ])));
+  lg.appendChild(ul); m.appendChild(lg);
+  return m;
+}
+
+function viewPerformance() {
+  const m = $("div");
+  const k = state.metrics;
+  if (!k) { m.appendChild($("div", { class: "card" }, [$("div", { class: "empty", text: "No metrics yet." })])); return m; }
+  m.appendChild($("div", { class: "card" }, [
+    $("h1", { text: "AI team performance" }),
+    $("div", { class: "note", text: `SAMPLE SIZE: ${k.sampleSize} TASK(S)` + (k.historicalOnly ? " — historical/reconstructed only." : ".") +
+      " These counters describe the tasks recorded so far and are not a measure of long-term agent accuracy. This is deliberately not a leaderboard." }),
+  ]));
+  const tbl = (title, rows) => {
+    const c = $("div", { class: "card" }, [$("h2", { text: title })]);
+    const t = $("table");
+    rows.forEach(([a, b]) => t.appendChild($("tr", {}, [$("td", { text: a }), $("td", { text: String(b) })])));
+    c.appendChild($("div", { class: "scroll" }, [t])); return c;
+  };
+  m.appendChild(tbl("Claude (advisor / adjudicator)", [
+    ["Design decisions", k.claude.designs], ["Adjudications", k.claude.adjudications],
+    ["Confirmed", k.claude.confirmed], ["Partial", k.claude.partial], ["Rejected", k.claude.rejected],
+  ]));
+  m.appendChild(tbl("Claude Code (builder)", [
+    ["Implementations", k.claudeCode.implementations], ["Fix rounds", k.claudeCode.fixRounds],
+    ["Scope expansions requested", k.claudeCode.scopeExpansions],
+  ]));
+  m.appendChild(tbl("Codex (independent reviewer)", [
+    ["Findings raised", k.codex.findings], ["Blockers", k.codex.blockers],
+    ["Confirmed", k.codex.confirmed], ["Partial", k.codex.partial], ["Rejected (false positives)", k.codex.rejected],
+    ["Not adjudicated", k.codex.notAdjudicated],
+  ]));
+  const cm = $("div", { class: "card" }, [$("h2", { text: "Who corrected whom" })]);
+  const t2 = $("table");
+  t2.appendChild($("tr", {}, [$("th", { text: "Corrector" }), $("th", { text: "Corrected Claude Code" }), $("th", { text: "Corrected Claude" })]));
+  t2.appendChild($("tr", {}, [$("td", { text: "Codex" }), $("td", { text: String(k.matrix.codexCorrectedClaudeCode) }), $("td", { text: "—" })]));
+  t2.appendChild($("tr", {}, [$("td", { text: "Claude (adjudication)" }), $("td", { text: String(k.matrix.claudeCorrectedClaudeCode) }), $("td", { text: "—" })]));
+  t2.appendChild($("tr", {}, [$("td", { text: "Runtime evidence" }), $("td", { text: String(k.matrix.runtimeCorrected) }), $("td", { text: String(k.matrix.runtimeCorrected) })]));
+  cm.appendChild($("div", { class: "scroll" }, [t2]));
+  cm.appendChild($("h3", { text: "Claude vs Codex" }));
+  cm.appendChild($("dl", { class: "kv" }, [
+    $("dt", { text: "Codex upheld" }), $("dd", { text: String(k.disagreements.codexRight) }),
+    $("dt", { text: "Claude upheld" }), $("dd", { text: String(k.disagreements.claudeRight) }),
+    $("dt", { text: "Mixed / partial" }), $("dd", { text: String(k.disagreements.mixed) }),
+  ]));
+  cm.appendChild($("div", { class: "m", style: "margin-top:8px", text: "Counted only where an adjudication exists. Findings nobody raised leave no trace, so misses cannot be counted here." }));
+  m.appendChild(cm);
+  m.appendChild(tbl("System", [
+    ["Escalations", k.system.escalations], ["Evidence conflicts", k.system.evidenceConflicts],
+    ["Policy blocks", k.system.policyBlocks], ["Rate-limit pauses", k.system.pauses],
+    ["Known evidence gaps", k.system.gaps], ["Deferred items", k.system.deferred],
+  ]));
+  return m;
+}
+
+function viewSystem() {
+  const m = $("div");
+  const s = state.sys;
+  if (!s) { m.appendChild($("div", { class: "card" }, [$("div", { class: "empty", text: "Loading…" })])); return m; }
+  m.appendChild($("div", { class: "card" }, [
+    $("h1", { text: "System status" }),
+    $("dl", { class: "kv" }, [
+      $("dt", { text: "Autopilot environment" }), $("dd", { text: s.environment }),
+      $("dt", { text: "Claude CLI" }), $("dd", { text: s.claude }),
+      $("dt", { text: "Codex CLI" }), $("dd", { text: s.codex }),
+      $("dt", { text: "Billing mode" }), $("dd", { text: s.billingMode }),
+      $("dt", { text: "Paid API keys" }), $("dd", { text: s.paidApiKeys.length ? s.paidApiKeys.join(", ") : "none configured" }),
+      $("dt", { text: "Test MariaDB" }), $("dd", { text: s.testMariadb }),
+      $("dt", { text: "Test Redis" }), $("dd", { text: s.testRedis }),
+      $("dt", { text: "Docker containers" }), $("dd", { text: String(s.dockerContainers) }),
+      $("dt", { text: "Accounting app" }), $("dd", { text: s.accountingUrl + " → HTTP " + s.accountingHttp }),
+      $("dt", { text: "Disk" }), $("dd", { text: s.disk }),
+      $("dt", { text: "Memory" }), $("dd", { text: s.memory }),
+      $("dt", { text: "Load" }), $("dd", { text: s.load }),
+      $("dt", { text: "Host uptime" }), $("dd", { text: s.uptimeHours + "h" }),
+      $("dt", { text: "Services" }), $("dd", { text: s.services.join(", ") || "—" }),
+      $("dt", { text: "Running tasks" }), $("dd", { text: s.runningTasks.join(", ") || "none" }),
+    ]),
+    $("div", { class: "note", style: "margin-top:12px", text: "Fault-injection tests run only against the disposable test databases above. Production endpoints are never a target." }),
+  ]));
+  return m;
+}
+
+// ---- auth screens --------------------------------------------------------
+
+function viewLogin(setupRequired) {
+  const c = $("div", { class: "card center" });
+  c.appendChild($("h1", { text: setupRequired ? "First-time setup" : "Sign in" }));
+  c.appendChild($("p", { class: "sub", text: setupRequired
+    ? "Create the owner account. The setup token was printed on the server; it is destroyed once setup completes."
+    : "Authorised access only." }));
+  const tok = $("input", { type: "text", placeholder: "Setup token", autocomplete: "off" });
+  const u = $("input", { type: "text", placeholder: "Username", autocomplete: "username" });
+  const pw = $("input", { type: "password", placeholder: setupRequired ? "New password (min 12 chars)" : "Password", autocomplete: "current-password" });
+  const err = $("div", { class: "err" });
+  const btn = $("button", { class: "btn", text: setupRequired ? "Create owner" : "Sign in", style: "width:100%" });
+  const submit = async () => {
+    err.textContent = ""; btn.disabled = true;
+    try {
+      if (setupRequired) {
+        await api("/api/setup", { method: "POST", body: JSON.stringify({ username: u.value, password: pw.value, token: tok.value.trim() }) });
+      }
+      const r = await api("/api/login", { method: "POST", body: JSON.stringify({ username: u.value, password: pw.value }) });
+      state.csrf = r.csrf; await boot();
+    } catch (e) { err.textContent = e.message; btn.disabled = false; }
+  };
+  btn.onclick = submit;
+  pw.onkeydown = e => { if (e.key === "Enter") submit(); };
+  if (setupRequired) { c.appendChild(tok); c.appendChild($("div", { style: "height:8px" })); }
+  c.appendChild(u); c.appendChild($("div", { style: "height:8px" }));
+  c.appendChild(pw); c.appendChild($("div", { style: "height:12px" }));
+  c.appendChild(btn); c.appendChild(err);
+  return c;
+}
+
+// ---- shell ---------------------------------------------------------------
+
+function go(view, taskId) { state.view = view; state.taskId = taskId || null; render(); if (view === "task") loadTask(taskId); }
+
+function render() {
+  const nav = document.getElementById("nav");
+  nav.textContent = "";
+  [["home","Home"],["tasks","Tasks"],["perf","Performance"],["system","System"]].forEach(([v, label]) => {
+    const b = $("button", { text: label, "aria-current": String(state.view === v) });
+    b.onclick = () => go(v); nav.appendChild(b);
+  });
+  const out = $("button", { text: "Sign out" });
+  out.onclick = async () => { await api("/api/logout", { method: "POST", body: "{}" }).catch(() => {}); location.reload(); };
+  nav.appendChild(out);
+  document.getElementById("envtag").textContent = state.env || "—";
+
+  const main = document.getElementById("main");
+  main.textContent = "";
+  main.appendChild(
+    state.view === "tasks" ? viewTasks() :
+    state.view === "perf" ? viewPerformance() :
+    state.view === "system" ? viewSystem() :
+    state.view === "task" ? viewTask(state.detail) : viewHome()
+  );
+}
+
+async function loadTask(id) { try { state.detail = await api("/api/tasks/" + id); render(); } catch { /* ignore */ } }
+async function refresh() {
+  try {
+    const [t, s, k] = await Promise.all([api("/api/tasks"), api("/api/system/status"), api("/api/metrics")]);
+    state.tasks = t.tasks; state.sys = s; state.metrics = k;
+    if (state.view === "task" && state.taskId) state.detail = await api("/api/tasks/" + state.taskId);
+    render();
+  } catch (e) { /* transient */ }
+}
+
+async function boot() {
+  const s = await api("/api/session");
+  state.env = s.environment;
+  if (!s.authenticated) {
+    document.getElementById("nav").textContent = "";
+    document.getElementById("envtag").textContent = s.environment || "";
+    const main = document.getElementById("main");
+    main.textContent = ""; main.appendChild(viewLogin(s.setupRequired));
+    return;
+  }
+  state.csrf = s.csrf;
+  await refresh();
+  const es = new EventSource("/api/events/stream");
+  es.addEventListener("change", () => refresh());
+}
+boot().catch(e => { document.getElementById("main").textContent = "Failed to start: " + e.message; });
+</script>
+</body>
+</html>

@@ -29,9 +29,19 @@ export class CodexAdapter implements AgentAdapter {
   private spec(): TransportSpec {
     const bin = this.resolveBin();
     if (bin) {
+      // Discovered from `codex exec --help` on this host (codex-cli 0.147.0):
+      // non-interactive run, JSON event stream, explicit working directory, and
+      // a read-only sandbox because a reviewer must never edit the code.
       return {
         kind: 'exec',
-        argv: [bin, 'exec', '--skip-git-repo-check', '{{PROMPT}}'],
+        argv: [
+          bin, 'exec',
+          '--json',
+          '--skip-git-repo-check',
+          '--sandbox', 'read-only',
+          '-C', this.repoRoot,
+          '{{PROMPT}}',
+        ],
         provider: this.provider,
       };
     }
@@ -40,7 +50,9 @@ export class CodexAdapter implements AgentAdapter {
 
   async available(): Promise<{ ok: boolean; reason?: string; mechanism?: string }> {
     const bin = this.resolveBin();
-    if (bin) return { ok: true, mechanism: `exec ${bin} exec <prompt>` };
+    if (bin) {
+      return { ok: true, mechanism: `exec ${bin} exec --json --sandbox read-only -C <repo>` };
+    }
     if (fixturesAllowed()) {
       return { ok: true, mechanism: 'fixture replay (SIMULATED — does NOT satisfy reviewer independence)' };
     }

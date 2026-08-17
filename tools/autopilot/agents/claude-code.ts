@@ -34,7 +34,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     }
     return {
       ok: false,
-      reason: 'the `claude` executable is not reachable from this process (see claude-advisor for detail)',
+      reason: 'the `claude` executable is not on PATH for this process (see claude-advisor for detail)',
     };
   }
 

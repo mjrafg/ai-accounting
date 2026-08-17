@@ -21,6 +21,7 @@ export type TaskState =
   | 'FIXING'
   | 'RE_REVIEW'
   | 'FINAL_ACCEPTANCE'
+  | 'PAUSED_RATE_LIMIT'
   | 'READY_TO_MERGE'
   | 'MERGED'
   | 'ESCALATED'
@@ -49,6 +50,7 @@ export type EventType =
   | 'VERDICT'
   | 'DEFERRED'
   | 'ESCALATION'
+  | 'PAUSED_RATE_LIMIT'
   | 'READY_TO_MERGE'
   | 'MERGED'
   | 'BACKFILL_GAP'
@@ -136,6 +138,11 @@ export interface AgentResult {
   error?: string;
   simulated: boolean;
   provider: string;
+  /**
+   * True when the provider refused because the subscription quota or rate limit
+   * is exhausted. This is a pause, never a reason to fall back to paid API use.
+   */
+  rateLimited?: boolean;
 }
 
 export interface AgentAdapter {

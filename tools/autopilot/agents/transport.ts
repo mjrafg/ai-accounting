@@ -30,6 +30,45 @@ export function fixturesAllowed(): boolean {
   return process.env.AI_ALLOW_FIXTURES === '1';
 }
 
+/**
+ * Subscription-only billing. The user pays for Claude and ChatGPT already; an
+ * API key present in the agent environment would silently bill per token, so
+ * adapters strip these rather than inherit them. Removing the variable is safe:
+ * both CLIs fall back to their stored subscription credentials.
+ */
+export const BILLING_MODE = 'SUBSCRIPTION_CLI_ONLY' as const;
+const BANNED_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+
+export function subscriptionEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const k of BANNED_ENV) delete env[k];
+  return env;
+}
+
+export function bannedKeysPresent(): string[] {
+  return BANNED_ENV.filter((k) => (process.env[k] ?? '').length > 0);
+}
+
+/**
+ * Quota exhaustion looks like an error but must not be treated as one: the
+ * correct response is to pause and retry later, never to switch to paid API
+ * billing.
+ */
+const RATE_LIMIT_PATTERNS = [
+  /rate.?limit/i,
+  /quota (?:exceeded|exhausted)/i,
+  /usage limit/i,
+  /too many requests/i,
+  /\b429\b/,
+  /you(?:'| ha)ve (?:reached|hit) your/i,
+  /upgrade to (?:pro|max)/i,
+  /resets? at/i,
+];
+
+export function looksRateLimited(raw: string): boolean {
+  return RATE_LIMIT_PATTERNS.some((re) => re.test(raw));
+}
+
 function requiredKeysFor(schemaName: string): string[] {
   switch (schemaName) {
     case 'design':
@@ -55,9 +94,10 @@ export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
     encoding: 'utf8',
     timeout: task.timeoutMs,
     maxBuffer: 256 * 1024 * 1024,
-    env: process.env,
+    env: subscriptionEnv(),
   });
   const raw = (res.stdout ?? '') + (res.stderr ?? '');
+  const rateLimited = res.status !== 0 && looksRateLimited(raw);
   const { rawArtifactPath, rawArtifactHash } = writeRawArtifact(
     task.taskId,
     `${spec.provider}-${task.role}-${started}.raw.txt`,
@@ -72,9 +112,14 @@ export function runExec(spec: TransportSpec, task: AgentTask): AgentResult {
     durationMs: Date.now() - started,
     exitCode: res.status,
     usage: extractUsage(raw),
-    error: parsed.ok ? undefined : parsed.error,
+    error: rateLimited
+      ? 'subscription quota or rate limit reached'
+      : parsed.ok
+        ? undefined
+        : parsed.error,
     simulated: false,
     provider: spec.provider,
+    rateLimited,
   };
 }
 

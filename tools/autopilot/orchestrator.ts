@@ -33,6 +33,7 @@ import { assertTransition, isTerminal } from './state-machine';
 import { ClaudeAdvisorAdapter } from './agents/claude-advisor';
 import { ClaudeCodeAdapter } from './agents/claude-code';
 import { CodexAdapter, reviewerIsIndependent } from './agents/codex';
+import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 export interface OrchestratorDeps {
   repoRoot: string;
@@ -185,6 +186,29 @@ export class Orchestrator {
     return 'ESCALATED';
   }
 
+  /**
+   * Quota exhaustion is a pause, not a failure and never a billing decision.
+   * The state is persisted so a later `resume` picks the task up unchanged.
+   */
+  private pauseForRateLimit(taskId: string, from: TaskState, provider: string): 'PAUSED_RATE_LIMIT' {
+    this.d.events.append({
+      taskId,
+      type: 'PAUSED_RATE_LIMIT',
+      actor: 'orchestrator',
+      payload: {
+        provider,
+        pausedFrom: from,
+        billingMode: BILLING_MODE,
+        note: 'subscription quota reached; will retry later. Paid API fallback is disabled.',
+      },
+    });
+    this.transition(taskId, from, 'PAUSED_RATE_LIMIT');
+    const rec = this.d.tasks.deriveTask(taskId);
+    if (rec) this.d.tasks.writeCache(rec);
+    this.log('  PAUSED_RATE_LIMIT (subscription quota; no API fallback)');
+    return 'PAUSED_RATE_LIMIT';
+  }
+
   createTask(title: string, risk: Risk): TaskRecord {
     const taskId = this.d.tasks.nextTaskId();
     const branch = `ai/${taskId.toLowerCase()}`;
@@ -214,6 +238,18 @@ export class Orchestrator {
     if (isTerminal(rec.state)) {
       this.log(`task ${taskId} already terminal: ${rec.state}`);
       return rec.state;
+    }
+
+    // Subscription-only billing is checked first: an API key in the environment
+    // would silently bill per token, which the operator explicitly refused.
+    const banned = bannedKeysPresent();
+    if (banned.length > 0) {
+      return this.escalate(
+        taskId,
+        `paid API credentials present in the environment (${banned.join(', ')}); ` +
+          'billing mode is SUBSCRIPTION_CLI_ONLY',
+        { policy: 'NO_PAID_API_FALLBACK' },
+      );
     }
 
     // Reviewer independence is checked before any code is written, so an
@@ -250,6 +286,7 @@ export class Orchestrator {
         cwd: this.d.repoRoot,
         timeoutMs: 20 * 60 * 1000,
       });
+      if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGNING', res.provider);
       if (!res.ok || !res.structured) {
         return this.escalate(taskId, `design phase failed: ${res.error ?? 'no structured output'}`);
       }
@@ -274,6 +311,7 @@ export class Orchestrator {
         cwd: this.d.repoRoot,
         timeoutMs: 20 * 60 * 1000,
       });
+      if (res.rateLimited) return this.pauseForRateLimit(taskId, 'DESIGN_REVIEW', res.provider);
       if (!res.ok || !res.structured) {
         return this.escalate(taskId, `design review failed: ${res.error ?? 'no structured output'}`);
       }
@@ -342,6 +380,7 @@ export class Orchestrator {
         cwd: this.d.repoRoot,
         timeoutMs: 60 * 60 * 1000,
       });
+      if (res.rateLimited) return this.pauseForRateLimit(taskId, 'IMPLEMENTING', res.provider);
       if (!res.ok || !res.structured) {
         return this.escalate(taskId, `implementation failed: ${res.error ?? 'no structured output'}`);
       }
@@ -403,6 +442,7 @@ export class Orchestrator {
         cwd: this.d.repoRoot,
         timeoutMs: 30 * 60 * 1000,
       });
+      if (res.rateLimited) return this.pauseForRateLimit(taskId, reviewState, res.provider);
       if (!res.ok || !res.structured) {
         return this.escalate(taskId, `implementation review failed: ${res.error ?? 'no structured output'}`);
       }
@@ -465,6 +505,7 @@ export class Orchestrator {
         cwd: this.d.repoRoot,
         timeoutMs: 60 * 60 * 1000,
       });
+      if (fixRes.rateLimited) return this.pauseForRateLimit(taskId, 'FIXING', fixRes.provider);
       if (!fixRes.ok || !fixRes.structured) {
         return this.escalate(taskId, `fix round ${round} failed: ${fixRes.error ?? 'no structured output'}`);
       }

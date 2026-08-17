@@ -51,10 +51,8 @@ export class ClaudeAdvisorAdapter implements AgentAdapter {
     return {
       ok: false,
       reason:
-        'the `claude` executable is not reachable from this process. It is installed on the macOS host ' +
-        '(/Users/mjrafg/.local/bin/claude, Mach-O arm64) but the repo toolchain runs inside the bc-node ' +
-        'Linux container, which has no node on the host side to run the CLI from. Set AI_CLAUDE_BIN to a ' +
-        'reachable executable, or run the orchestrator where `claude` exists.',
+        'the `claude` executable is not on PATH for this process. Install Claude Code for the service ' +
+        'user or set AI_CLAUDE_BIN to a reachable executable.',
     };
   }
 

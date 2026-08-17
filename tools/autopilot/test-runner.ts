@@ -20,22 +20,30 @@ export interface CommandSpec {
 }
 
 /**
- * The repo's toolchain lives in the bc-node container (there is no host node),
- * so suites are invoked through docker exec by default. Overridable for tests.
+ * Suites run natively on this host. Linux is the execution source of truth: the
+ * filesystem is case-sensitive (the EE/ee collision that forced a container
+ * workaround on macOS does not exist here), and node is installed for the
+ * service user, so there is no container hop between the orchestrator and the
+ * tests it is judging.
+ *
+ * A login shell is used so nvm's node/pnpm are on PATH under systemd too.
  */
-export function containerCmd(name: string, shellCommand: string, container = 'bc-node'): CommandSpec {
+export const SERVER_DIR =
+  process.env.AI_SERVER_DIR ?? '/srv/ai-accounting/repo/packages/server';
+
+export function serverCmd(name: string, shellCommand: string): CommandSpec {
   return {
     name,
-    argv: ['docker', 'exec', container, 'bash', '-lc', `cd /src/packages/server && ${shellCommand}`],
-    cwd: process.cwd(),
+    argv: ['bash', '-lc', `cd ${SERVER_DIR} && ${shellCommand}`],
+    cwd: SERVER_DIR,
     timeoutMs: 60 * 60 * 1000,
   };
 }
 
 export const SUITES = {
-  typecheck: () => containerCmd('typecheck', 'npx tsc --noEmit -p tsconfig.build.json'),
-  stage0: () => containerCmd('stage0', 'pnpm test:stage0'),
-  baseline: () => containerCmd('stage-minus-1-baseline', 'node test/e2e-runner.mjs'),
+  typecheck: () => serverCmd('typecheck', 'npx tsc --noEmit -p tsconfig.build.json'),
+  stage0: () => serverCmd('stage0', 'pnpm test:stage0'),
+  baseline: () => serverCmd('stage-minus-1-baseline', 'node test/e2e-runner.mjs'),
 };
 
 const JEST_COUNTS = /Tests:\s+(.+)/;

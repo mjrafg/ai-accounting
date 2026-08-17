@@ -21,6 +21,7 @@ import { ClaudeCodeAdapter } from './agents/claude-code';
 import { CodexAdapter } from './agents/codex';
 import { Risk } from './types';
 import { runSelfTests } from './selftest';
+import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
@@ -95,6 +96,13 @@ async function cmdDoctor(): Promise<number> {
     const a = await adapter.available();
     check(`adapter ${adapter.name} (${adapter.provider})`, a.ok, a.ok ? a.mechanism ?? '' : a.reason ?? '');
   }
+
+  const banned = bannedKeysPresent();
+  check(
+    `billing mode ${BILLING_MODE}`,
+    banned.length === 0,
+    banned.length === 0 ? 'no paid API keys in environment' : `paid API keys present: ${banned.join(', ')}`,
+  );
 
   const server = path.join(REPO_ROOT, 'packages', 'server');
   check('Stage 0 script present', /"test:stage0"/.test(fs.readFileSync(path.join(server, 'package.json'), 'utf8')), 'packages/server');

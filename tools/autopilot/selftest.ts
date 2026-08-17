@@ -479,6 +479,83 @@ export async function runSelfTests(repoRoot: string): Promise<number> {
     },
   });
 
+  // K. Rate limit -------------------------------------------------------------
+  cases.push({
+    name: 'K. subscription quota exhaustion pauses instead of billing an API',
+    run: async () => {
+      const { root, events, tasks } = scratch();
+      const repo = scratchRepo();
+      const rateLimited: AgentAdapter = {
+        name: 'claude-advisor', provider: 'anthropic',
+        async available() { return { ok: true, mechanism: 'stub' }; },
+        async run(): Promise<AgentResult> {
+          return {
+            ok: false, structured: null, rawArtifactPath: '', rawArtifactHash: 'stub',
+            durationMs: 1, exitCode: 1, usage: null, simulated: false,
+            provider: 'anthropic', rateLimited: true,
+            error: 'subscription quota or rate limit reached',
+          };
+        },
+      };
+      const deps: OrchestratorDeps = {
+        repoRoot: repo, events, tasks, policy,
+        git: new GitManager(repo, policy),
+        advisor: rateLimited,
+        builder: stubAdapter('claude-code', 'anthropic', {}),
+        reviewer: stubAdapter('codex', 'openai', {}),
+        log: () => undefined,
+      };
+      const orch = new Orchestrator(deps);
+      const rec = orch.createTask('quota exhausted', 'high');
+      const state = await orch.run(rec.taskId);
+      assert(state === 'PAUSED_RATE_LIMIT', `expected PAUSED_RATE_LIMIT, got ${state}`);
+
+      const pause = tasks.byType(rec.taskId, 'PAUSED_RATE_LIMIT');
+      assert(pause.length === 1, 'no pause event recorded');
+      assert((pause[0].payload as any).billingMode === 'SUBSCRIPTION_CLI_ONLY', 'billing mode not recorded');
+      // The pause must be durable so `resume` can pick it up later.
+      assert(tasks.deriveTask(rec.taskId)!.state === 'PAUSED_RATE_LIMIT', 'pause not persisted');
+      assert(tasks.byType(rec.taskId, 'ESCALATION').length === 0, 'quota pause was treated as a failure');
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    },
+  });
+
+  // L. Paid-API refusal --------------------------------------------------------
+  cases.push({
+    name: 'L. a paid API key in the environment stops the run',
+    run: async () => {
+      const { root, events, tasks } = scratch();
+      const repo = scratchRepo();
+      const prev = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = 'sk-test-not-a-real-key-000000';
+      try {
+        const deps: OrchestratorDeps = {
+          repoRoot: repo, events, tasks, policy,
+          git: new GitManager(repo, policy),
+          advisor: stubAdapter('claude-advisor', 'anthropic', {}),
+          builder: stubAdapter('claude-code', 'anthropic', {}),
+          reviewer: stubAdapter('codex', 'openai', {}),
+          log: () => undefined,
+        };
+        const orch = new Orchestrator(deps);
+        const rec = orch.createTask('api key present', 'high');
+        const state = await orch.run(rec.taskId);
+        assert(state === 'ESCALATED', `expected ESCALATED, got ${state}`);
+        const esc = tasks.byType(rec.taskId, 'ESCALATION');
+        assert(
+          String((esc[0].payload as any).reason).includes('SUBSCRIPTION_CLI_ONLY'),
+          'escalation did not cite the billing policy',
+        );
+      } finally {
+        if (prev === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = prev;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    },
+  });
+
   // run ----------------------------------------------------------------------
   let failed = 0;
   const results: Array<[string, boolean, string]> = [];
