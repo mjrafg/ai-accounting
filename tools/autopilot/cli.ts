@@ -23,6 +23,7 @@ import { Risk } from './types';
 import { runSelfTests } from './selftest';
 import { MergeManager } from './merge-manager';
 import { DeployManager } from './deploy-manager';
+import { runMergeIntegrationTests } from './merge-integration-test';
 import { bannedKeysPresent, BILLING_MODE } from './agents/transport';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -249,6 +250,11 @@ async function main(): Promise<number> {
     case 'selftest':
       return await runSelfTests(REPO_ROOT);
 
+    case 'merge-selftest':
+      // Exercises the merge workflow end to end against a throwaway repository.
+      // Never touches this one.
+      return await runMergeIntegrationTests(REPO_ROOT);
+
     default:
       out('usage: pnpm ai <command>');
       out('');
@@ -266,6 +272,7 @@ async function main(): Promise<number> {
       out('  deploy state                             current production release state');
       out('  backfill stage0                          reconstruct Stage 0 history');
       out('  selftest                                 run the autopilot self-tests');
+      out('  merge-selftest                           merge workflow test on a disposable repo');
       return cmd ? 1 : 0;
   }
 }

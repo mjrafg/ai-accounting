@@ -35,13 +35,42 @@ export interface MergePreflight {
 
 const LOCK = '/srv/ai-accounting/state/merge.lock';
 
+/**
+ * Seams for testing the merge workflow itself.
+ *
+ * The blocking behaviour here — stale branch, moved main, dirty tree, protected
+ * path, failing post-merge gate — is the part that must never regress, and the
+ * only honest way to prove it works is to run a real merge and watch it be
+ * refused. That cannot be done against the accounting repository, so these let
+ * an integration test point the same code at a disposable one.
+ *
+ * Production always uses the defaults; nothing is injected at runtime.
+ */
+export interface MergeManagerOptions {
+  lockPath?: string;
+  /** Substituted only by the integration test; real gates are the default. */
+  acceptance?: (taskId: string, policy: PolicyEngine) => { final(risk: Risk): {
+    ok: boolean;
+    outcomes: any[];
+    violations: any[];
+    evidenceConflict?: { detail: string };
+  } };
+}
+
 export class MergeManager {
+  private readonly lock: string;
+  private readonly makeAcceptance: NonNullable<MergeManagerOptions['acceptance']>;
+
   constructor(
     private readonly repo: string,
     private readonly events: EventStore,
     private readonly tasks: TaskStore,
     private readonly policy: PolicyEngine,
-  ) {}
+    opts: MergeManagerOptions = {},
+  ) {
+    this.lock = opts.lockPath ?? LOCK;
+    this.makeAcceptance = opts.acceptance ?? ((id, p) => new AcceptanceRunner(id, p));
+  }
 
   private git(args: string[], allowFail = false): string {
     try {
@@ -133,7 +162,7 @@ export class MergeManager {
     risk: Risk,
     targetBranch = 'main',
   ): Promise<{ ok: boolean; state: string; detail: string; mergeSha?: string }> {
-    if (fs.existsSync(LOCK)) {
+    if (fs.existsSync(this.lock)) {
       return { ok: false, state: 'LOCKED', detail: 'another merge is in progress' };
     }
     const pre = this.preflight(taskId, targetBranch);
@@ -141,8 +170,8 @@ export class MergeManager {
       return { ok: false, state: 'REFUSED', detail: pre.problems.join('; ') };
     }
 
-    fs.mkdirSync(path.dirname(LOCK), { recursive: true });
-    fs.writeFileSync(LOCK, `${taskId} ${owner} ${new Date().toISOString()}\n`);
+    fs.mkdirSync(path.dirname(this.lock), { recursive: true });
+    fs.writeFileSync(this.lock, `${taskId} ${owner} ${new Date().toISOString()}\n`);
     try {
       // Written first, and never touched again whatever happens next.
       this.events.append({
@@ -179,7 +208,7 @@ export class MergeManager {
       }
 
       // Post-merge gates on the merged result, before anything is published.
-      const acceptance = new AcceptanceRunner(taskId, this.policy);
+      const acceptance = this.makeAcceptance(taskId, this.policy);
       const gates = acceptance.final(risk);
       for (const o of gates.outcomes) {
         this.events.append({
@@ -230,7 +259,7 @@ export class MergeManager {
       if (rec) this.tasks.writeCache(rec);
       return { ok: true, state: 'MERGED', detail: 'merged and pushed', mergeSha };
     } finally {
-      fs.rmSync(LOCK, { force: true });
+      fs.rmSync(this.lock, { force: true });
     }
   }
 }

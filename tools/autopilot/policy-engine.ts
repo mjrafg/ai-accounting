@@ -93,7 +93,17 @@ export class PolicyEngine {
     return out;
   }
 
-  /** Structurally protected paths, independent of what the design allowed. */
+  /**
+   * Structurally protected paths, independent of what the design allowed.
+   *
+   * Both lists are enforced. `protectedPaths` is the literal list an operator
+   * edits in .ai/policies/default.json; `forbiddenPathPatterns` is the regex
+   * list. Until this consulted both, two entries operators had explicitly
+   * marked protected were silently unenforced — including
+   * packages/server/test/e2e-baseline.json, the canonical Stage -1 baseline,
+   * which is precisely the file an agent could rewrite to make a regression
+   * look green.
+   */
   checkProtectedPaths(changedFiles: string[]): PolicyViolation[] {
     const out: PolicyViolation[] = [];
     for (const f of changedFiles) {
@@ -104,6 +114,12 @@ export class PolicyEngine {
       for (const pat of this.policy.forbiddenPathPatterns) {
         if (new RegExp(pat).test(f)) {
           out.push({ rule: 'PROTECTED_PATH', detail: `${f} matches /${pat}/` });
+        }
+      }
+      for (const p of this.policy.protectedPaths) {
+        // Exact file, or anything beneath a protected directory.
+        if (f === p || f.startsWith(p.replace(/\/*$/, '/'))) {
+          out.push({ rule: 'PROTECTED_PATH', detail: `${f} is a protected path (${p})` });
         }
       }
     }

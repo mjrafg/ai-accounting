@@ -1,0 +1,24 @@
+{
+  "taskId": "TASK-0005",
+  "title": "Review the current repository and summarise the Stage 0 deferred issues recorded in the Autopilot event logs and reports. Do not modify any files.",
+  "risk": "low",
+  "state": "ESCALATED",
+  "branch": "ai/task-0005",
+  "createdAt": "2026-08-17T05:15:51.875Z",
+  "updatedAt": "2026-08-17T05:20:38.786Z",
+  "reviewRounds": 0,
+  "autoMerge": false,
+  "allowlist": [
+    ".ai/tasks/TASK-0000/events.jsonl",
+    ".ai/tasks/TASK-0001/events.jsonl",
+    ".ai/reports/TASK-0000.md",
+    ".ai/reports/TASK-0001.md",
+    ".ai/schema/events.schema.json",
+    "tools/autopilot/backfill-stage0.ts",
+    "packages/server/src/modules/CreditNotes/subscribers/CreditNoteInventoryTransactionsSubscriber.ts",
+    "packages/server/src/modules/CreditNotes/models/CreditNote.ts",
+    "packages/server/src/modules/CreditNotes/commands/CommandCreditNoteDTOTransform.service.ts",
+    "packages/server/test/stage0-final-atomicity.stage0-spec.ts"
+  ],
+  "lastError": "policy blocked the change set (4 violation(s))"
+}
