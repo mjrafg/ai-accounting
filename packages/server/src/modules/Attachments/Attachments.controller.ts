@@ -1,4 +1,10 @@
-import mime from 'mime-types';
+// Namespace import, not a default import. This package sets
+// `allowSyntheticDefaultImports` without `esModuleInterop`, so a default import
+// type-checks but emits `require('mime-types').default` — and mime-types is
+// CommonJS with no default export, so `mime` was undefined at runtime and every
+// call to this route threw. Same reason the rest of the package imports CJS
+// modules this way.
+import * as mime from 'mime-types';
 import { Response, NextFunction, Request } from 'express';
 import {
   ApiBody,

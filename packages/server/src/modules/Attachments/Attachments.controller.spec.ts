@@ -57,3 +57,89 @@ describe('AttachmentsController authorization', () => {
     }
   });
 });
+
+describe('AttachmentsController.getAttachment', () => {
+  /** Minimal stand-in for the GetObjectCommandOutput the service returns. */
+  const s3Object = (body: string, contentType?: string) => ({
+    ContentType: contentType,
+    Body: {
+      transformToByteArray: async () => new Uint8Array(Buffer.from(body)),
+    },
+  });
+
+  const makeRes = () => {
+    const headers: Record<string, string> = {};
+    return {
+      headers,
+      body: undefined as Buffer | undefined,
+      set(key: string, value: string) {
+        headers[key] = value;
+      },
+      send(buffer: Buffer) {
+        this.body = buffer;
+      },
+    };
+  };
+
+  const controllerReturning = (object: unknown) =>
+    new AttachmentsController(
+      { get: jest.fn().mockResolvedValue(object) } as any,
+      {} as any,
+      {} as any,
+    );
+
+  // Regression test. This route threw
+  //   TypeError: Cannot read properties of undefined (reading 'extension')
+  // because `mime` was imported as a default from a CommonJS module. The
+  // failure was in the import, not in the handler's logic, so nothing short of
+  // actually invoking the handler catches it.
+  it('streams the object body and names the file from its content type', async () => {
+    const controller = controllerReturning(s3Object('hello', 'text/plain'));
+    const res = makeRes();
+
+    await controller.getAttachment(res as any, 'doc-key-1');
+
+    expect(res.headers['Content-Type']).toBe('text/plain');
+    expect(res.headers['Content-Disposition']).toBe('filename="doc-key-1.txt"');
+    expect(res.body?.toString()).toBe('hello');
+  });
+
+  it('falls back to octet-stream when the object has no content type', async () => {
+    const controller = controllerReturning(s3Object('raw bytes', undefined));
+    const res = makeRes();
+
+    await controller.getAttachment(res as any, 'doc-key-2');
+
+    expect(res.headers['Content-Type']).toBe('application/octet-stream');
+    expect(res.headers['Content-Disposition']).toBe('filename="doc-key-2.bin"');
+    expect(res.body?.toString()).toBe('raw bytes');
+  });
+
+  it('falls back to .bin when the content type maps to no known extension', async () => {
+    const controller = controllerReturning(
+      s3Object('x', 'application/x-not-a-real-type'),
+    );
+    const res = makeRes();
+
+    await controller.getAttachment(res as any, 'doc-key-3');
+
+    expect(res.headers['Content-Type']).toBe('application/x-not-a-real-type');
+    expect(res.headers['Content-Disposition']).toBe('filename="doc-key-3.bin"');
+  });
+
+  it('resolves a spreadsheet content type to its real extension', async () => {
+    const controller = controllerReturning(
+      s3Object(
+        'sheet',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ),
+    );
+    const res = makeRes();
+
+    await controller.getAttachment(res as any, 'doc-key-4');
+
+    expect(res.headers['Content-Disposition']).toBe(
+      'filename="doc-key-4.xlsx"',
+    );
+  });
+});
