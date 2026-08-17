@@ -1,0 +1,28 @@
+{
+  "taskId": "TASK-0006",
+  "title": "Read-only review: list every DEFERRED and BACKFILL_GAP record across the Autopilot event logs and summarise what each one means. Do not modify any files.",
+  "risk": "low",
+  "state": "ESCALATED",
+  "branch": "ai/task-0006",
+  "createdAt": "2026-08-17T06:16:52.106Z",
+  "updatedAt": "2026-08-17T06:29:42.957Z",
+  "reviewRounds": 1,
+  "autoMerge": false,
+  "allowlist": [
+    ".ai/tasks/DEPLOY-PRODUCTION/events.jsonl",
+    ".ai/tasks/TASK-0000/events.jsonl",
+    ".ai/tasks/TASK-0001/events.jsonl",
+    ".ai/tasks/TASK-0002/events.jsonl",
+    ".ai/tasks/TASK-0003/events.jsonl",
+    ".ai/tasks/TASK-0004/events.jsonl",
+    ".ai/tasks/TASK-0005/events.jsonl",
+    ".ai/tasks/TASK-0006/events.jsonl",
+    ".ai/schema/events.schema.json",
+    ".ai/reports/TASK-0000.md",
+    ".ai/reports/TASK-0001.md",
+    ".ai/reports/TASK-0005.md",
+    "tools/autopilot/report.ts",
+    "tools/control-center/server.mjs"
+  ],
+  "lastError": "BLOCKER findings all rejected in adjudication — unresolved dispute"
+}
