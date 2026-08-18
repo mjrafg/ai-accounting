@@ -25,14 +25,24 @@ export function RegisterForm({ isSubmitting }: { isSubmitting: boolean }) {
     setShowPassword(!showPassword);
   };
 
-  const lockButton = (
-    <Tooltip2 content={`${showPassword ? 'Hide' : 'Show'} Password`}>
+  // The accessible name deliberately avoids the word "password" so it does not
+  // collide with the password input when queried by label.
+  const passwordRevealer = (
+    <Tooltip2
+      content={intl.get(
+        showPassword ? 'login_hide_password' : 'login_show_password',
+      )}
+    >
       <Button
-        icon={showPassword ? 'unlock' : 'lock'}
-        intent={Intent.WARNING}
+        type={'button'}
+        icon={showPassword ? 'eye-off' : 'eye-open'}
         minimal={true}
         onClick={handleLockClick}
-        small={true}
+        aria-label={intl.get(
+          showPassword ? 'login_hide_characters' : 'login_show_characters',
+        )}
+        aria-pressed={showPassword}
+        data-testId={'register-password-revealer'}
       />
     </Tooltip2>
   );
@@ -61,7 +71,7 @@ export function RegisterForm({ isSubmitting }: { isSubmitting: boolean }) {
         <FInputGroup
           name={'password'}
           type={showPassword ? 'text' : 'password'}
-          rightElement={lockButton}
+          rightElement={passwordRevealer}
           large={true}
         />
       </FFormGroup>
@@ -96,4 +106,18 @@ const TermsConditionsText = styled.p`
 
 const RegisterFormRoot = styled(Form)`
   position: relative;
+
+  .bp4-input-action .bp4-button {
+    --x-color-revealer: #5f6b7a;
+
+    .bp4-dark & {
+      --x-color-revealer: rgba(255, 255, 255, 0.6);
+    }
+    margin: 4px 4px 0 0;
+    color: var(--x-color-revealer);
+
+    .bp4-icon {
+      color: inherit;
+    }
+  }
 `;
