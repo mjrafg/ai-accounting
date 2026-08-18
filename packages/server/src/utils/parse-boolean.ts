@@ -16,7 +16,10 @@ export const parseBoolean = <T>(value: any, defaultValue: T): T | boolean => {
     return value; // Retrun early we have nothing to parse.
   }
   const normalizedValue = normalizeValue(value);
-  if (isEmpty(value) || booleanValues.indexOf(normalizedValue) === -1) {
+  if (
+    isEmpty(normalizedValue) ||
+    booleanValues.indexOf(normalizedValue) === -1
+  ) {
     return defaultValue;
   }
   return booleanValuesRepresentingTrue.indexOf(normalizedValue) !== -1;
