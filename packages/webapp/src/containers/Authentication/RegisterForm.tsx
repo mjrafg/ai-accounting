@@ -38,9 +38,12 @@ export function RegisterForm({ isSubmitting }: { isSubmitting: boolean }) {
         icon={showPassword ? 'eye-off' : 'eye-open'}
         minimal={true}
         onClick={handleLockClick}
-        aria-label={intl.get(
-          showPassword ? 'login_hide_characters' : 'login_show_characters',
-        )}
+        aria-label={
+          intl.get('register_show_characters_aria') ||
+          intl.get(
+            showPassword ? 'login_hide_characters' : 'login_show_characters',
+          )
+        }
         aria-pressed={showPassword}
         data-testId={'register-password-revealer'}
       />
