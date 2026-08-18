@@ -249,5 +249,20 @@ test.describe('authentication', () => {
         'Email is a required field'
       );
     });
+
+    test('should label the new and confirm password fields distinctly.', async () => {
+      // The page renders regardless of the token; the token is only read on
+      // submit, so a dummy one is enough to inspect the form labels.
+      await authPage.goto('/auth/reset_password/dummy-token');
+
+      const form = authPage.locator('form');
+      const newPassword = form.getByLabel('New Password', { exact: true });
+      const confirmPassword = form.getByLabel('Confirm password', {
+        exact: true,
+      });
+
+      await expect(newPassword).toHaveAttribute('name', 'password');
+      await expect(confirmPassword).toHaveAttribute('name', 'confirm_password');
+    });
   });
 });
