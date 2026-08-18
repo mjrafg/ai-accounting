@@ -5,11 +5,11 @@ export function assocItemEntriesDefaultIndex<T>(
 ): Array<T & { index: number }> {
   return entries.map((entry, index) => {
     return {
+      ...entry,
       index:
         isUndefined(entry.index) || isNull(entry.index)
           ? index + 1
           : entry.index,
-      ...entry,
     };
   });
 }
