@@ -22,6 +22,7 @@ import * as checks from './checks';
 import * as policy from './policy';
 import { automaticDeploymentEnabled } from './settings';
 import { generateReport } from './report';
+import * as models from './models';
 
 const CONTROL_REPO = process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo';
 const DEPLOY_BIN = process.env.AI_DEPLOY_BIN ?? '/srv/ai-accounting/bin/deploy-production';
@@ -49,7 +50,12 @@ export class Orchestrator {
     return `TASK-V2-${String(n).padStart(4, '0')}`;
   }
 
-  createTask(description: string, risk: Risk): TaskRecord {
+  createTask(description: string, risk: Risk,
+    opts?: { modelOverrides?: Record<string, { model?: string; reasoning?: string | null }> }): TaskRecord {
+    // Model policy is resolved and validated BEFORE the task exists, then
+    // snapshotted immutably — later global changes never rewrite a task.
+    const rp = models.resolvePolicy(opts?.modelOverrides);
+    if (!rp.ok) throw new Error(rp.error);
     const taskId = this.nextTaskId();
     const branch = `ai/${taskId.toLowerCase()}`;
     const baseSha = this.wtm.accountingBase('origin/main');
@@ -60,6 +66,9 @@ export class Orchestrator {
         worktree: this.wtm.pathFor(taskId),
       },
     });
+    this.events.append({ taskId, type: 'TASK_MODEL_POLICY', payload: {
+      policy: rp.policy, source: opts?.modelOverrides ? 'task-overrides' : 'global-defaults',
+      overrides: opts?.modelOverrides ?? null } });
     return deriveTask(this.events, taskId)!;
   }
 
@@ -101,12 +110,75 @@ export class Orchestrator {
   // Agent helpers
   // -------------------------------------------------------------------------
 
+  /** The task's immutable model-policy snapshot (created at task start; legacy tasks get one on first use). */
+  taskModelPolicy(taskId: string): Record<string, models.ResolvedRole> {
+    const evs = this.events.read(taskId);
+    for (let i = evs.length - 1; i >= 0; i--) {
+      if (evs[i].type === 'TASK_MODEL_POLICY') return (evs[i].payload as any).policy ?? {};
+    }
+    const r = models.resolvePolicy();
+    const policy = r.ok ? r.policy : {};
+    this.events.append({ taskId, type: 'TASK_MODEL_POLICY', payload: {
+      policy, source: 'global-defaults', note: 'backfilled for a task created before role-based models' } });
+    return policy;
+  }
+
+  /** Explicit owner action: re-snapshot this task's models from current defaults. */
+  updateTaskModels(taskId: string, by: string): boolean {
+    const r = models.resolvePolicy();
+    if (!r.ok) return false;
+    this.events.append({ taskId, type: 'TASK_MODEL_POLICY', payload: {
+      policy: r.policy, source: 'owner-update', actor: by } });
+    this.stream.append(taskId, 'system', 'lifecycle', `task model policy updated to current defaults by ${by}`);
+    return true;
+  }
+
+  private static MODEL_UNAVAILABLE =
+    /model metadata for .* not found|invalid model|unknown model|no such model|model .*not (found|available|exist)/i;
+
   private async agent(taskId: string, spec: Omit<AgentSpec, 'taskId'>, phase: string) {
-    this.events.append({ taskId, type: 'AGENT_STARTED', agent: spec.agent as any, phase, payload: { subPhase: spec.phase } });
-    const res = await runAgentBounded({ ...spec, taskId }, this.stream, (kind, err) => {
+    // Role → concrete model/reasoning from the task's snapshot, never live
+    // globals: a task keeps the semantics it started with.
+    const rr = spec.role ? this.taskModelPolicy(taskId)[spec.role] : undefined;
+    let runSpec: Omit<AgentSpec, 'taskId'> = {
+      ...spec,
+      model: spec.model ?? rr?.model,
+      reasoning: spec.reasoning !== undefined ? spec.reasoning : (rr?.reasoning ?? null),
+    };
+    const startedAt = new Date().toISOString();
+    this.events.append({ taskId, type: 'AGENT_STARTED', agent: spec.agent as any, phase, payload: {
+      subPhase: spec.phase, role: spec.role ?? null, provider: spec.agent,
+      requestedModel: runSpec.model ?? null, reasoningEffort: runSpec.reasoning ?? null, startedAt } });
+
+    const onRetry = (kind: string, err: string) => {
       this.events.append({ taskId, type: 'NOTE', agent: spec.agent as any, phase, attempt: 2,
         payload: { retry: true, failureKind: kind, reason: err.slice(0, 300) } });
-    });
+    };
+    let res = await runAgentBounded({ ...runSpec, taskId }, this.stream, onRetry);
+    let fallbackModel: string | null = null;
+
+    // Model-unavailable → the role's configured fallback, SAME provider only.
+    // A silent provider switch is architecturally forbidden.
+    if (!res.ok && !res.rateLimited && rr && Orchestrator.MODEL_UNAVAILABLE.test(res.error ?? '')) {
+      const fb = models.fallbackFor(rr);
+      if (fb.action === 'model') {
+        fallbackModel = fb.model;
+        this.events.append({ taskId, type: 'NOTE', payload: { modelFallback: {
+          role: rr.role, provider: rr.provider, requested: rr.model, fallbackTo: fb.model,
+          policy: rr.fallback, reason: (res.error ?? '').slice(0, 200) } } });
+        this.stream.append(taskId, 'system', 'lifecycle',
+          `model ${rr.model} unavailable for ${rr.role}; fallback → ${fb.model} (same provider)`);
+        res = await runAgentBounded({ ...runSpec, model: fb.model, taskId }, this.stream, onRetry);
+        // Keep the ORIGINAL request visible so the fallback is never hidden.
+        res = { ...res, requestedModel: rr.model };
+      } else {
+        this.events.append({ taskId, type: 'NOTE', payload: { modelUnavailablePaused: {
+          role: rr.role, provider: rr.provider, requested: rr.model, policy: rr.fallback } } });
+        this.setState(taskId, this.task(taskId)!.state, 'PAUSED', phase, 'model-unavailable', {
+          note: `${rr.model} unavailable for ${rr.role}; fallback policy is '${rr.fallback}'. Resume after changing the role's model or availability.` });
+      }
+    }
+
     this.events.append({
       taskId, type: res.ok ? 'AGENT_FINISHED' : 'AGENT_FAILED', agent: spec.agent as any, phase,
       attempt: res.attempts,
@@ -116,6 +188,9 @@ export class Orchestrator {
         firstChunkMs: res.firstChunkMs ?? null, rateLimited: res.rateLimited,
         requestedModel: res.requestedModel ?? null, effectiveModel: res.effectiveModel ?? null,
         cliVersion: res.cliVersion ?? null, authMode: res.authMode ?? null,
+        role: spec.role ?? null, provider: spec.agent,
+        reasoningEffort: runSpec.reasoning ?? null,
+        fallbackModel, startedAt, finishedAt: new Date().toISOString(),
       },
     });
     return res;
@@ -129,6 +204,9 @@ export class Orchestrator {
   }
 
   private escalate(taskId: string, from: TaskState, reason: string): TaskState {
+    // A pause decided by fallback policy holds; the failure that follows it
+    // must not overwrite the owner-facing PAUSED state.
+    if (this.task(taskId)?.state === 'PAUSED') return 'PAUSED';
     this.events.append({ taskId, type: 'NOTE', payload: { lastError: reason } });
     this.setState(taskId, from, 'ESCALATED', '', '', { reason });
     return 'ESCALATED';
@@ -177,7 +255,7 @@ export class Orchestrator {
     if (rec.state === 'NEW' || (rec.state === 'DESIGN' && !currentDesign(this.events, taskId))) {
       if (rec.state === 'NEW') this.setState(taskId, 'NEW', 'DESIGN', 'design', 'claude');
       const res = await this.agent(taskId, {
-        agent: 'claude', cwd, readOnly: true, phase: 'design/claude',
+        agent: 'claude', cwd, readOnly: true, phase: 'design/claude', role: 'claude.design',
         timeoutMs: 15 * 60_000,
         requiredKeys: ['scopeAllowlist', 'plan', 'invariants', 'predictions', 'requiredTests', 'acceptance'],
         prompt: designPrompt(rec),
@@ -195,7 +273,7 @@ export class Orchestrator {
     const hadDesignReview = this.events.read(taskId).some((e) => e.type === 'FINDING' && e.phase === 'design');
     if (rec.state === 'DESIGN' && budget.designReview && !hadDesignReview) {
       const rev = await this.agent(taskId, {
-        agent: 'codex', cwd, phase: 'design/codex-review', timeoutMs: 15 * 60_000,
+        agent: 'codex', cwd, phase: 'design/codex-review', role: 'codex.designReview', timeoutMs: 15 * 60_000,
         requiredKeys: ['findings'],
         prompt: designReviewPrompt(rec, design),
       }, 'design');
@@ -219,7 +297,7 @@ export class Orchestrator {
       const done = this.events.read(taskId).some((e) => e.type === 'CODE_CHANGE');
       if (!done) {
         const impl = await this.agent(taskId, {
-          agent: 'claude-code', cwd, phase: 'implement', timeoutMs: 40 * 60_000,
+          agent: 'claude-code', cwd, phase: 'implement', role: 'claudeCode.implementation', timeoutMs: 40 * 60_000,
           requiredKeys: ['status', 'filesChanged'],
           prompt: implementPrompt(rec, design),
         }, 'implement');
@@ -382,7 +460,7 @@ export class Orchestrator {
   private async adjudicate(taskId: string, cwd: string, rec: TaskRecord, findings: Finding[],
     design: DesignRevision, phase: string): Promise<'ok' | 'RATE_LIMIT'> {
     const adj = await this.agent(taskId, {
-      agent: 'claude', cwd, readOnly: true, phase: `${phase}/adjudication`, timeoutMs: 10 * 60_000,
+      agent: 'claude', cwd, readOnly: true, phase: `${phase}/adjudication`, role: 'claude.adjudication', timeoutMs: 10 * 60_000,
       requiredKeys: ['adjudications'],
       prompt: adjudicatePrompt(rec, findings, design, phase === 'design'),
     }, phase);
@@ -456,7 +534,7 @@ export class Orchestrator {
     fixes: Finding[], reason: string): Promise<'ok' | TaskState> {
     this.setState(taskId, this.task(taskId)!.state, 'FIX', 'fix', reason.slice(0, 40));
     const res = await this.agent(taskId, {
-      agent: 'claude-code', cwd, phase: 'fix', timeoutMs: 25 * 60_000,
+      agent: 'claude-code', cwd, phase: 'fix', role: 'claudeCode.repair', timeoutMs: 25 * 60_000,
       requiredKeys: ['status', 'filesChanged'],
       prompt: fixPrompt(rec, design, fixes, reason),
     }, 'fix');
@@ -478,7 +556,7 @@ export class Orchestrator {
     for (let cycle = 0; cycle <= budget.materialCycles; cycle++) {
       const diff = this.wtm.diff(cwd, rec.baseSha).slice(0, 350_000);
       const rev = await this.agent(taskId, {
-        agent: 'codex', cwd, phase: `review/cycle-${cycle + 1}`, timeoutMs: 20 * 60_000,
+        agent: 'codex', cwd, phase: `review/cycle-${cycle + 1}`, role: 'codex.codeReview', timeoutMs: 20 * 60_000,
         requiredKeys: ['findings'],
         prompt: reviewPrompt(rec, design, diff),
       }, 'review');
@@ -756,17 +834,17 @@ export class Orchestrator {
    */
   retryFromEscalation(taskId: string, by: string): boolean {
     const rec = this.task(taskId);
-    if (!rec || rec.state !== 'ESCALATED') return false;
+    if (!rec || (rec.state !== 'ESCALATED' && rec.state !== 'PAUSED')) return false;
     const evs = this.events.read(taskId);
     let last: TaskState = 'DESIGN';
     for (const e of evs) {
       if (e.type === 'STATE_CHANGED') {
         const to = (e.payload as any).to as TaskState;
-        if (!['ESCALATED', 'FAILED', 'CANCELLED', 'AWAITING_HUMAN'].includes(to)) last = to;
+        if (!['ESCALATED', 'FAILED', 'CANCELLED', 'AWAITING_HUMAN', 'PAUSED', 'PAUSED_RATE_LIMIT'].includes(to)) last = to;
       }
     }
     this.events.append({ taskId, type: 'NOTE', payload: { retryAuthorized: by, reenteringAt: last } });
-    this.setState(taskId, 'ESCALATED', last, 'retry', `by ${by}`);
+    this.setState(taskId, rec.state, last, 'retry', `by ${by}`);
     return true;
   }
 

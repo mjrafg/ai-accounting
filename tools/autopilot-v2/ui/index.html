@@ -109,7 +109,7 @@ const $ = (t, attrs = {}, kids = []) => {
 };
 const freshRep = () => ({ current:null, history:[], busy:false, msg:"", auto:false, timer:null, delta:null, loaded:false });
 const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null, dep:null,
-  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false}, rep: freshRep() };
+  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false}, rep: freshRep(), modelMeta:null };
 
 async function api(path, opts = {}) {
   const o = { headers: { "content-type": "application/json" }, ...opts };
@@ -144,18 +144,59 @@ function viewHome() {
     seg.appendChild(b);
   });
   const err = $("div", { class: "err" });
+
+  // Advanced (collapsed): optional per-task model overrides. The default path
+  // stays a plain textarea + Start; the snapshot records whatever is chosen.
+  const adv = $("details", { style: "margin-top:10px" });
+  adv.appendChild($("summary", { style: "cursor:pointer;color:var(--muted);font-size:13px", text: "Advanced" }));
+  const advBody = $("div", { style: "margin-top:8px" });
+  const useDefaults = $("input", { type: "checkbox", style: "width:auto" });
+  useDefaults.checked = true;
+  advBody.appendChild($("label", { class: "row", style: "font-size:13.5px" },
+    [useDefaults, $("span", { text: "Use default AI models" })]));
+  const ovBox = $("div", { style: "display:none;margin-top:8px" });
+  const ovSelects = {};
+  const buildOverrides = () => {
+    ovBox.textContent = "";
+    const mm = state.modelMeta;
+    if (!mm) { ovBox.appendChild($("div", { class: "empty", text: "Loading model list…" })); loadModelMeta().then(() => { if (!useDefaults.checked) { buildOverrides(); } }); return; }
+    for (const role of mm.roles) {
+      const provKey = role.provider === "codex" ? "codex" : "claude";
+      const avail = Object.entries(mm.settings.providers[provKey].models).filter(([,v]) => v.available).map(([k]) => k);
+      const row = $("div", { class: "row", style: "margin-top:6px" });
+      row.appendChild($("span", { style: "min-width:230px;font-size:12.5px;color:var(--muted)", text: role.group + " — " + role.label }));
+      const sel = $("select", { style: "max-width:220px" });
+      sel.appendChild($("option", { value: "", text: "Default (" + mm.settings.roles[role.id].model + ")", selected: true }));
+      for (const mdl of avail) sel.appendChild($("option", { value: mdl, text: mdl }));
+      ovSelects[role.id] = sel;
+      row.appendChild(sel);
+      ovBox.appendChild(row);
+    }
+  };
+  useDefaults.onchange = () => { ovBox.style.display = useDefaults.checked ? "none" : "block"; if (!useDefaults.checked) buildOverrides(); };
+  advBody.appendChild(ovBox);
+  adv.appendChild(advBody);
+
   const go = $("button", { class: "btn", text: "Start" });
   go.onclick = async () => {
     err.textContent = "";
     if (!ta.value.trim()) { err.textContent = "Describe the task first."; return; }
     go.disabled = true;
     try {
-      const r = await api("/api/v2/tasks", { method: "POST", body: JSON.stringify({ description: ta.value.trim(), risk }) });
+      let modelOverrides;
+      if (!useDefaults.checked) {
+        modelOverrides = {};
+        for (const [rid, sel] of Object.entries(ovSelects)) if (sel.value) modelOverrides[rid] = { model: sel.value };
+        if (!Object.keys(modelOverrides).length) modelOverrides = undefined;
+      }
+      const r = await api("/api/v2/tasks", { method: "POST",
+        body: JSON.stringify({ description: ta.value.trim(), risk, modelOverrides }) });
       ta.value = ""; await refresh(); goTask(r.taskId);
     } catch (e) { err.textContent = e.message; }
     go.disabled = false;
   };
   c.appendChild($("div", { class: "row", style: "margin-top:10px" }, [seg, go]));
+  c.appendChild(adv);
   c.appendChild(err);
   m.appendChild(c);
 
@@ -386,13 +427,31 @@ function tabLive(t) {
   controls.appendChild(auto);
   c.appendChild(controls);
 
+  // Latest run info per agent: role, requested/effective model, reasoning —
+  // the pane header names the actual model, never only the provider.
+  const runInfo = {};
+  for (const a of (t.agents || [])) {
+    const cur = runInfo[a.agent] || {};
+    if (a.type === "AGENT_STARTED") runInfo[a.agent] = { ...a, live: true };
+    else runInfo[a.agent] = { ...cur, ...a, live: false };
+  }
+  const roleLabel = (rid) => (state.modelMeta?.roles || []).find(r => r.id === rid)?.label || rid || "";
+
   const agents = $("div", { class: "agents" });
   for (const a of ["claude","codex","claude-code","system"]) {
     if (state.filter !== "all" && state.filter !== a) continue;
     const pane = $("div", { class: "apane" });
+    const ri = runInfo[a];
+    const model = ri && (ri.effectiveModel || ri.requestedModel);
+    const mismatch = ri && ri.effectiveModel && ri.requestedModel && ri.effectiveModel !== ri.requestedModel;
     pane.appendChild($("div", { class: "ahead" }, [
       $("span", { class: "live-dot", id: "dot-" + a }),
       $("span", { text: a.toUpperCase() }),
+      ri && ri.role ? $("span", { class: "m", style: "color:var(--muted);font-weight:400", text: roleLabel(ri.role) }) : null,
+      model ? $("span", { class: "pill s-idle", style: "font-weight:600", text: model }) : null,
+      mismatch ? $("span", { class: "pill s-warn", text: "requested " + ri.requestedModel }) : null,
+      ri && ri.reasoningEffort ? $("span", { class: "m", style: "color:var(--muted);font-weight:400", text: "Reasoning: " + ri.reasoningEffort }) : null,
+      ri && ri.live ? $("span", { class: "pill s-run", text: "● LIVE" }) : null,
     ]));
     const log = $("div", { class: "alog", id: "alog-" + a });
     for (const ch of (paneBufs[a] || [])) if (matchesSearch(ch)) log.appendChild(chunkLine(ch));
@@ -819,6 +878,8 @@ function viewSystem() {
   } else dep.appendChild($("div",{class:"empty",text:"Loading…"}));
   m.appendChild(dep);
 
+  m.appendChild(aiModelsCard());
+
   const mfa = $("div",{class:"card"},[$("h2",{text:"MFA"})]);
   if (s.mfa.enrolled) mfa.appendChild($("p",{class:"sub",text:"TOTP enrolled. Merge/deploy/decision approvals require a valid code."}));
   else {
@@ -839,6 +900,124 @@ function viewSystem() {
   }
   m.appendChild(mfa);
   return m;
+}
+
+// ---- AI MODELS (System) ---------------------------------------------------
+async function loadModelMeta() {
+  try { state.modelMeta = await api("/api/v2/settings/models"); } catch { /* transient */ }
+}
+async function patchModel(body, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/v2/settings/models", { method: "PATCH", body: JSON.stringify(body) });
+    state.modelMeta = { ...state.modelMeta, settings: r.settings };
+    render();
+  } catch (e) { alert(e.message); if (btn) btn.disabled = false; }
+}
+function aiModelsCard() {
+  const c = $("div", { class: "card" }, [$("h2", { text: "AI Models" })]);
+  const mm = state.modelMeta;
+  if (!mm) {
+    c.appendChild($("div", { class: "empty", text: "Loading…" }));
+    if (!aiModelsCard._loading) {
+      aiModelsCard._loading = true;
+      loadModelMeta().then(() => { aiModelsCard._loading = false; if (state.modelMeta) render(); });
+    }
+    return c;
+  }
+  const s = mm.settings;
+  c.appendChild($("p", { class: "sub", text: "Per-role model selection. Only models verified against the subscription-authenticated CLIs are selectable. A role's provider is fixed — reviewer independence is structural." }));
+
+  // Presets: they FILL the role settings below, never hide them.
+  const prow = $("div", { class: "row", style: "margin:8px 0" });
+  for (const pr of (mm.presets || [])) {
+    const b = $("button", { class: "btn sec", text: pr.replace(/-/g, " ").replace(/\b\w/g, ch => ch.toUpperCase()) });
+    b.onclick = () => { if (confirm(`Apply preset "${pr}" to all roles? Each role's selector below will show the result.`)) patchModel({ preset: pr }, b); };
+    prow.appendChild(b);
+  }
+  const refresh = $("button", { class: "btn sec", text: mm.refreshing ? "Probing models…" : "Refresh Models" });
+  refresh.disabled = !!mm.refreshing;
+  refresh.onclick = async () => {
+    refresh.disabled = true; refresh.textContent = "Probing models…";
+    try {
+      await api("/api/v2/settings/models/refresh", { method: "POST", body: "{}" });
+      const before = mm.settings.updatedAt;
+      // The probes run in the background on the server; poll until they land.
+      const poll = setInterval(async () => {
+        await loadModelMeta();
+        if (state.modelMeta && state.modelMeta.settings.updatedAt !== before && !state.modelMeta.refreshing) {
+          clearInterval(poll); render();
+        }
+      }, 5000);
+      setTimeout(() => clearInterval(poll), 10 * 60000);
+    } catch (e) { alert(e.message); refresh.disabled = false; refresh.textContent = "Refresh Models"; }
+  };
+  prow.appendChild(refresh);
+  c.appendChild(prow);
+  c.appendChild($("p", { class: "sub", text: "Refresh Models probes each candidate with a tiny real request through the subscription CLI (server-owned commands only) — availability reflects reality, not a hard-coded list." }));
+
+  const provInfo = {
+    "CLAUDE": { key: "claude", provider: "claude" },
+    "CLAUDE CODE": { key: "claude", provider: "claude-code" },
+    "CODEX": { key: "codex", provider: "codex" },
+  };
+  for (const [group, gi] of Object.entries(provInfo)) {
+    const ps = s.providers[gi.key];
+    const avail = Object.entries(ps.models).filter(([,v]) => v.available).map(([k]) => k);
+    const sec = $("div", { style: "margin-top:14px;border-top:1px solid var(--line);padding-top:10px" });
+    sec.appendChild($("div", { class: "row" }, [
+      $("h3", { text: group, style: "margin:0" }),
+      $("span", { class: "pill " + (ps.connected ? "s-ok" : "s-bad"), text: ps.connected ? "Connected" : "Unavailable" }),
+      $("span", { class: "m", style: "color:var(--muted);font-size:12px", text: `CLI ${ps.cliVersion} · Auth: ${ps.authMode}` }),
+    ]));
+    for (const role of mm.roles.filter(r => r.provider === gi.provider)) {
+      const rs = s.roles[role.id];
+      const row = $("div", { class: "row", style: "margin-top:8px;flex-wrap:wrap" });
+      row.appendChild($("span", { style: "min-width:190px;font-size:13.5px", text: role.label }));
+
+      const msel = $("select", { style: "max-width:220px" });
+      for (const mdl of avail) {
+        const o = $("option", { value: mdl, text: mdl });
+        if (mdl === rs.model) o.selected = true;
+        msel.appendChild(o);
+      }
+      if (!avail.includes(rs.model)) msel.appendChild($("option", { value: rs.model, text: rs.model + " (unverified)", selected: true }));
+      msel.onchange = () => patchModel({ role: role.id, model: msel.value });
+      row.appendChild(msel);
+
+      const rsel = $("select", { style: "max-width:150px" });
+      rsel.appendChild($("option", { value: "", text: "Reasoning: default", selected: !rs.reasoning }));
+      for (const lv of (mm.reasoning[gi.key] || [])) {
+        const o = $("option", { value: lv, text: "Reasoning: " + lv });
+        if (lv === rs.reasoning) o.selected = true;
+        rsel.appendChild(o);
+      }
+      rsel.onchange = () => patchModel({ role: role.id, reasoning: rsel.value || null });
+      row.appendChild(rsel);
+
+      const fsel = $("select", { style: "max-width:230px" });
+      const fopts = [["best-available", "Fallback: best available (same provider)"], ["pause", "Fallback: pause task"]];
+      for (const mdl of avail) if (mdl !== rs.model) fopts.push(["backup:" + mdl, "Fallback: backup " + mdl]);
+      for (const [v, label] of fopts) {
+        const o = $("option", { value: v, text: label });
+        if (v === rs.fallback) o.selected = true;
+        fsel.appendChild(o);
+      }
+      fsel.onchange = () => patchModel({ role: role.id, fallback: fsel.value });
+      row.appendChild(fsel);
+
+      const av = ps.models[rs.model];
+      if (av) row.appendChild($("span", { class: "m", style: "color:var(--muted);font-size:11.5px",
+        text: `${av.available ? "verified" : "UNVERIFIED"} ${fmt(av.lastChecked)}` + (av.effectiveModel && av.effectiveModel !== rs.model ? ` · effective: ${av.effectiveModel}` : "") }));
+      sec.appendChild(row);
+    }
+    sec.appendChild($("div", { class: "mono", style: "font-size:11px;color:var(--muted);margin-top:6px",
+      text: "models: " + Object.entries(ps.models).map(([k, v]) => `${k}${v.available ? " ✓" : " ✗"}`).join("  ") }));
+    c.appendChild(sec);
+  }
+  c.appendChild($("div", { class: "mono", style: "font-size:11px;color:var(--muted);margin-top:10px",
+    text: `stored at state-v2/settings/models.json · last change: ${s.updatedBy} at ${fmt(s.updatedAt)} · billing: SUBSCRIPTION_CLI_ONLY (no paid API fallback)` }));
+  return c;
 }
 
 // ---- login / shell --------------------------------------------------------
@@ -889,7 +1068,7 @@ async function refresh() {
   } catch { /* transient */ }
 }
 async function loadObs() { try { state.obs = await api("/api/v2/observatory"); render(); } catch {} }
-async function loadSys() { try { state.sys = await api("/api/v2/system"); state.dep = await api("/api/v2/settings/deployment"); render(); } catch {} }
+async function loadSys() { try { state.sys = await api("/api/v2/system"); state.dep = await api("/api/v2/settings/deployment"); await loadModelMeta(); render(); } catch {} }
 
 async function boot() {
   const s = await api("/api/v2/session");
@@ -902,6 +1081,7 @@ async function boot() {
   }
   state.csrf = s.csrf;
   try { state.dep = await api("/api/v2/settings/deployment"); } catch { /* first paint without it */ }
+  loadModelMeta().then(() => { if (state.view !== "home") render(); }); // non-blocking
   await refresh(); render();
   setInterval(refresh, 15000);
 }

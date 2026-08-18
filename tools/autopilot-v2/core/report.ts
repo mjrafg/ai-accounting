@@ -23,6 +23,7 @@ import { execFile } from 'child_process';
 import { EventStore, deriveTask, currentDesign, allFindings, STATE_ROOT } from './store';
 import { redact, redactPayload } from './redact';
 import { subscriptionEnv, CLAUDE_MODEL } from './agents';
+import { getModelSettings } from './models';
 import { inspectEnvelope } from './parsers';
 import { TaskState } from './types';
 
@@ -392,6 +393,7 @@ async function generateWithClaude(snap: any, level: DetailLevel): Promise<{ text
 - زبان: فارسی روان و طبیعی. جهت متن راست‌به‌چپ است.
 - هر شناسه فنی (نام فایل، مسیر، SHA، دستور، TASK-V2-…، Stage 0، Stage −1، نام مدل) را داخل \`backtick\` بگذار تا LTR بماند.
 - Claude و Codex و Claude Code را از هم جدا توضیح بده؛ Codex بازبین مستقل است.
+- برای هر Agent، مدل مؤثری که واقعاً استفاده کرده (فیلد effectiveModel در snapshot) را در \`backtick\` ذکر کن — مثلاً «Claude طراحی را با مدل \`…\` انجام داد». اگر requestedModel با effectiveModel فرق دارد، این تفاوت را صریح بگو.
 - شواهد قطعی (تست‌ها و بررسی‌های ثبت‌شده) بر ادعای Agent‌ها مقدم است؛ اگر تضاد بود، شواهد را گزارش کن.
 - «تأییدشده» و «تأییدنشده» را دقیقاً همان‌طور که در snapshot است حفظ کن؛ چیزی را پنهان یا ارتقا نده.
 - رویدادهای تکراری (مثلاً retryها) را در قالب یک روایت کوتاه جمع کن، نه فهرست خام.
@@ -403,8 +405,13 @@ ${structure}
 SNAPSHOT:
 ${JSON.stringify(sanitized).slice(0, 90_000)}`;
 
+  // Role-based model: reports and simplification are separately configurable.
+  const roleCfg = getModelSettings().roles[level === 'SIMPLE' ? 'claude.simplify' : 'claude.report'];
+  const model = roleCfg?.model ?? CLAUDE_MODEL;
   const stdout = await new Promise<string | null>((resolve) => {
-    const child = execFile(CLAUDE_BIN, ['-p', prompt, '--model', CLAUDE_MODEL, '--output-format', 'json'],
+    const child = execFile(CLAUDE_BIN, ['-p', prompt, '--model', model,
+      ...(roleCfg?.reasoning ? ['--effort', roleCfg.reasoning] : []),
+      '--output-format', 'json'],
       { encoding: 'utf8', timeout: 5 * 60_000, maxBuffer: 32 * 1024 * 1024, env: subscriptionEnv() },
       (err, out) => resolve(err ? null : String(out)));
     child.stdin?.end();
@@ -481,10 +488,12 @@ async function generateReportInner(events: EventStore, taskId: string, level: De
     statusCard: statusCard(snapshot),
     // Output redaction again — defense in depth even though inputs were sanitized.
     narrative: redact(narrative),
-    generator: attempt.text ? (attempt.effectiveModel ?? CLAUDE_MODEL) : 'deterministic-fallback',
+    generator: attempt.text
+      ? (attempt.effectiveModel ?? getModelSettings().roles[level === 'SIMPLE' ? 'claude.simplify' : 'claude.report']?.model ?? CLAUDE_MODEL)
+      : 'deterministic-fallback',
     generationMs: Date.now() - t0,
     snapshotMs,
-    requestedModel: CLAUDE_MODEL,
+    requestedModel: getModelSettings().roles[level === 'SIMPLE' ? 'claude.simplify' : 'claude.report']?.model ?? CLAUDE_MODEL,
     effectiveModel: attempt.text ? attempt.effectiveModel : undefined,
   };
   const file = path.join(reportDir(taskId),

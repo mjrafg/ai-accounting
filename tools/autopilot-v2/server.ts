@@ -20,6 +20,9 @@ import { mfaStatus, mfaBeginEnroll, mfaConfirmEnroll, mfaCheck } from './core/mf
 import { stageMinus1Lock, deployLock } from './core/checks';
 import { getDeploymentSettings, setAutomaticDeployment } from './core/settings';
 import { generateReport, listReports, whatChanged } from './core/report';
+import {
+  ROLES, REASONING, PRESETS, getModelSettings, setRoleSetting, applyPreset, refreshAvailability, isRefreshing,
+} from './core/models';
 import { TaskRecord } from './core/types';
 
 const HOST = process.env.AI_BIND_HOST ?? '172.17.0.1';
@@ -120,8 +123,10 @@ function projectTask(taskId: string) {
     for (const v of ev.verified ?? []) verified.push(String(v));
     for (const v of ev.notVerified ?? []) notVerified.push(String(v));
   }
+  const modelPolicy = evs.filter((e) => e.type === 'TASK_MODEL_POLICY').map((e) => e.payload as any).pop() ?? null;
   return {
     ...rec, design, designRevisions, findings, tests, checks: checksEv, agents, merge, deploy,
+    modelPolicy,
     verified, notVerified,
     eventCount: evs.length,
     history: evs.map((e) => ({ seq: e.seq, ts: e.ts, type: e.type, agent: e.agent, phase: e.phase,
@@ -321,7 +326,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const description = String(body.description ?? '').trim().slice(0, 8000);
     const risk = ['low', 'medium', 'high'].includes(body.risk) ? body.risk : 'high';
     if (!description) return json(res, 400, { error: 'a description is required' });
-    const rec = orch.createTask(description, risk);
+    // Optional per-task model overrides: role keys must exist in the registry;
+    // values are validated (model must be probe-verified) inside resolvePolicy.
+    let overrides: Record<string, { model?: string; reasoning?: string | null }> | undefined;
+    if (body.modelOverrides && typeof body.modelOverrides === 'object') {
+      overrides = {};
+      for (const [k, v] of Object.entries(body.modelOverrides as Record<string, any>)) {
+        if (!ROLES.some((r) => r.id === k)) return json(res, 400, { error: `unknown role in modelOverrides: ${k}` });
+        if (!v || typeof v !== 'object') return json(res, 400, { error: `override for ${k} must be an object` });
+        overrides[k] = {
+          ...(typeof v.model === 'string' ? { model: v.model } : {}),
+          ...('reasoning' in v ? { reasoning: v.reasoning === null ? null : String(v.reasoning) } : {}),
+        };
+      }
+      if (!Object.keys(overrides).length) overrides = undefined;
+    }
+    let rec;
+    try { rec = orch.createTask(description, risk, { modelOverrides: overrides }); }
+    catch (e: any) { return json(res, 400, { error: String(e?.message ?? e) }); }
     // Fire-and-forget: the pipeline streams its progress; the UI watches live.
     orch.run(rec.taskId).catch(() => undefined);
     return json(res, 200, { ok: true, taskId: rec.taskId });
@@ -345,9 +367,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       if (rateGate('write', ip)) return json(res, 429, { error: 'rate limited' });
       if (action === 'resume') {
         const rec0 = deriveTask(events, taskId);
-        if (rec0?.state === 'ESCALATED') orch.retryFromEscalation(taskId, sess.user);
+        if (rec0?.state === 'ESCALATED' || rec0?.state === 'PAUSED') orch.retryFromEscalation(taskId, sess.user);
         orch.run(taskId).catch(() => undefined);
         return json(res, 200, { ok: true });
+      }
+      if (action === 'update-models') {
+        // Explicit owner action: re-snapshot this task's model policy from
+        // current defaults. Never automatic; running agents are unaffected.
+        const ok = orch.updateTaskModels(taskId, sess.user);
+        return json(res, ok ? 200 : 409, { ok });
       }
       if (action === 'cancel') {
         const body = await readBody(req);
@@ -414,7 +442,45 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return json(res, 404, { error: 'not found' });
   }
 
-  // ---- Deployment settings (the ONLY setting the browser can write) ------
+  // ---- AI model settings (role-based; closed-world validation) -----------
+  if (p === '/api/v2/settings/models' && req.method === 'GET') {
+    return json(res, 200, {
+      roles: ROLES, reasoning: REASONING, presets: PRESETS,
+      refreshing: isRefreshing(),
+      settings: getModelSettings(),
+    });
+  }
+  if (p === '/api/v2/settings/models' && (req.method === 'PATCH' || req.method === 'POST')) {
+    if (rateGate('write', ip)) return json(res, 429, { error: 'rate limited' });
+    if (req.headers['x-csrf-token'] !== sess.csrf) return json(res, 403, { error: 'csrf token mismatch' });
+    const body = await readBody(req);
+    // Two shapes only: {preset} or {role, model?, reasoning?, fallback?}.
+    // Everything is validated against the closed registry — the browser can
+    // never smuggle CLI arguments, env vars, or shell through here.
+    if (typeof body.preset === 'string') {
+      const r = applyPreset(body.preset, sess.user, events);
+      return r.ok ? json(res, 200, { ok: true, applied: r.applied, settings: getModelSettings() })
+        : json(res, 400, { error: r.error });
+    }
+    if (typeof body.role !== 'string') return json(res, 400, { error: 'role or preset is required' });
+    const patch: any = {};
+    if ('model' in body) patch.model = body.model;
+    if ('reasoning' in body) patch.reasoning = body.reasoning === null ? null : String(body.reasoning);
+    if ('fallback' in body) patch.fallback = body.fallback;
+    const r = setRoleSetting(body.role, patch, sess.user, events);
+    return r.ok ? json(res, 200, { ok: true, settings: getModelSettings() }) : json(res, 400, { error: r.error });
+  }
+  if (p === '/api/v2/settings/models/refresh' && req.method === 'POST') {
+    // Probes spend a few subscription tokens per candidate — deploy-class rate.
+    if (rateGate('deploy', ip)) return json(res, 429, { error: 'rate limited' });
+    if (req.headers['x-csrf-token'] !== sess.csrf) return json(res, 403, { error: 'csrf token mismatch' });
+    if (isRefreshing()) return json(res, 202, { ok: true, running: true });
+    // Runs in the background (serialized, async probes); the UI polls GET.
+    refreshAvailability(sess.user, events).catch(() => undefined);
+    return json(res, 202, { ok: true, started: true });
+  }
+
+  // ---- Deployment settings (boolean toggle; separately audited) ----------
   if (p === '/api/v2/settings/deployment' && req.method === 'GET') {
     return json(res, 200, {
       ...getDeploymentSettings(),

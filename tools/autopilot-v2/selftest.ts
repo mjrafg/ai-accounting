@@ -26,6 +26,10 @@ import { totp, verifyTotp, base32Encode } from './core/mfa';
 import { getDeploymentSettings, setAutomaticDeployment, automaticDeploymentEnabled } from './core/settings';
 import { CLAUDE_MODEL } from './core/agents';
 import {
+  ROLES, REASONING, getModelSettings, setRoleSetting, applyPreset, resolvePolicy, fallbackFor,
+  __setAvailabilityForTest,
+} from './core/models';
+import {
   buildSnapshot, statusCard, deterministicPersian, generateReport, generateDeterministic,
   listReports, whatChanged,
 } from './core/report';
@@ -415,6 +419,117 @@ async function main(): Promise<number> {
       ['UNRESOLVED', 'FIX', 'DETERMINISTICALLY_CONFIRMED'].includes(f.status));
     check('review-loop filters: nothing to fix, nothing open → REVIEW exits automatically',
       toFix.length === 0 && openMaterial.length === 0);
+  }
+
+  // ---- role-based model selection -----------------------------------------
+  section('role-based models: per-role settings, validation, snapshot, fallback');
+  {
+    const ev = new EventStore();
+    // Availability is probe-derived in production; tests inject it explicitly.
+    __setAvailabilityForTest('claude', 'claude-fable-5', true);
+    __setAvailabilityForTest('claude', 'claude-sonnet-5', true);
+    __setAvailabilityForTest('codex', 'gpt-5.6-sol', true);
+    __setAvailabilityForTest('codex', 'gpt-5.2', true);
+
+    // each role independently configurable; Claude vs Claude Code differ
+    let r = setRoleSetting('claude.design', { model: 'claude-fable-5', reasoning: 'max' }, 't', ev);
+    check('claude.design set', r.ok);
+    r = setRoleSetting('claudeCode.implementation', { model: 'claude-sonnet-5', reasoning: 'medium' }, 't', ev);
+    check('claudeCode.implementation set to a DIFFERENT model', r.ok);
+    r = setRoleSetting('codex.designReview', { model: 'gpt-5.6-sol', reasoning: 'xhigh' }, 't', ev);
+    check('codex.designReview set', r.ok);
+    r = setRoleSetting('codex.codeReview', { model: 'gpt-5.2', reasoning: 'high' }, 't', ev);
+    check('codex.codeReview set to a DIFFERENT codex model', r.ok);
+    let s = getModelSettings();
+    check('Claude Design != Claude Code Implementation',
+      s.roles['claude.design'].model !== s.roles['claudeCode.implementation'].model);
+    check('Codex Design Review != Codex Code Review',
+      s.roles['codex.designReview'].model !== s.roles['codex.codeReview'].model);
+    check('settings persist on disk (fresh read)',
+      fs.existsSync(path.join(process.env.AI_V2_STATE!, 'settings', 'models.json')) &&
+      JSON.parse(fs.readFileSync(path.join(process.env.AI_V2_STATE!, 'settings', 'models.json'), 'utf8')).roles['claude.design'].model === 'claude-fable-5');
+
+    // validation: closed world only
+    check('unverified model rejected', !setRoleSetting('claude.design', { model: 'claude-imaginary-9' }, 't', ev).ok);
+    check('unsupported reasoning rejected (none is codex-only)',
+      !setRoleSetting('claude.design', { reasoning: 'none' }, 't', ev).ok);
+    check('codex accepts its own enum', setRoleSetting('codex.investigation', { reasoning: 'minimal' }, 't', ev).ok);
+    check('unknown role rejected', !setRoleSetting('claude.hacking', { model: 'claude-fable-5' }, 't', ev).ok);
+    check('cross-provider model rejected (Codex role cannot take a Claude model)',
+      !setRoleSetting('codex.codeReview', { model: 'claude-fable-5' }, 't', ev).ok);
+    check('cross-provider model rejected (Claude role cannot take a GPT model)',
+      !setRoleSetting('claude.design', { model: 'gpt-5.6-sol' }, 't', ev).ok);
+    check('shell-shaped model identifier rejected',
+      !setRoleSetting('claude.design', { model: 'fable; rm -rf /' }, 't', ev).ok);
+
+    // audit
+    const audit = ev.read('SYSTEM-SETTINGS').filter((e) => e.type === 'SETTING_CHANGED' &&
+      String((e.payload as any).setting).startsWith('models.'));
+    check('every model change produced an immutable audit event', audit.length >= 4 &&
+      ev.verify('SYSTEM-SETTINGS').ok);
+    check('audit records from/to/actor', (audit[0].payload as any).actor === 't' &&
+      (audit[0].payload as any).to.model === 'claude-fable-5');
+
+    // resolve + per-task override + immutable snapshot semantics
+    const base = resolvePolicy();
+    check('default policy inherits global role settings', base.ok &&
+      base.ok === true && base.policy['claude.design'].model === 'claude-fable-5' &&
+      base.policy['codex.codeReview'].model === 'gpt-5.2');
+    const ov = resolvePolicy({ 'codex.codeReview': { model: 'gpt-5.6-sol' } });
+    check('per-task override applies to that role only', ov.ok && ov.ok === true &&
+      ov.policy['codex.codeReview'].model === 'gpt-5.6-sol' &&
+      ov.policy['codex.designReview'].model === 'gpt-5.6-sol' &&
+      ov.policy['claude.design'].model === 'claude-fable-5');
+    check('override with unverified model rejected',
+      !resolvePolicy({ 'codex.codeReview': { model: 'gpt-99-imaginary' } }).ok);
+    check('override with unsupported reasoning rejected',
+      !resolvePolicy({ 'claude.design': { reasoning: 'turbo' } }).ok);
+
+    // snapshot immutability: policy recorded in events, later global change ignored
+    const tid = 'TASK-V2-9300';
+    ev.append({ taskId: tid, type: 'TASK_CREATED', payload: { title: 'x', description: 'x', risk: 'low', branch: 'b', baseSha: 'a', worktree: '/w' } });
+    ev.append({ taskId: tid, type: 'TASK_MODEL_POLICY', payload: { policy: (base as any).policy, source: 'global-defaults' } });
+    setRoleSetting('claude.design', { model: 'claude-sonnet-5' }, 't', ev); // global change AFTER snapshot
+    const snap = ev.read(tid).filter((e) => e.type === 'TASK_MODEL_POLICY').pop()!;
+    check('task model snapshot unaffected by later global change',
+      ((snap.payload as any).policy['claude.design'].model) === 'claude-fable-5' &&
+      getModelSettings().roles['claude.design'].model === 'claude-sonnet-5');
+    // explicit owner update = a NEW snapshot event, history preserved
+    const cur = resolvePolicy();
+    ev.append({ taskId: tid, type: 'TASK_MODEL_POLICY', payload: { policy: (cur as any).policy, source: 'owner-update', actor: 't' } });
+    const snaps = ev.read(tid).filter((e) => e.type === 'TASK_MODEL_POLICY');
+    check('owner update appends a new snapshot; original kept', snaps.length === 2 &&
+      ((snaps[1].payload as any).policy['claude.design'].model) === 'claude-sonnet-5');
+
+    // fallback: same provider always; pause honored; backup honored
+    const roleA = { role: 'codex.codeReview', provider: 'codex' as const, model: 'gpt-5.2', reasoning: null, fallback: 'best-available' as const };
+    const fb1 = fallbackFor(roleA);
+    check('best-available fallback stays on codex', fb1.action === 'model' && (fb1 as any).model === 'gpt-5.6-sol');
+    check('fallback never crosses provider', fb1.action === 'model' && !/claude/.test((fb1 as any).model));
+    const fb2 = fallbackFor({ ...roleA, fallback: 'pause' });
+    check('pause policy honored', fb2.action === 'pause');
+    const fb3 = fallbackFor({ ...roleA, fallback: 'backup:gpt-5.6-sol' });
+    check('explicit backup model honored', fb3.action === 'model' && (fb3 as any).model === 'gpt-5.6-sol');
+    const fb4 = fallbackFor({ role: 'claude.design', provider: 'claude', model: 'claude-sonnet-5', reasoning: null, fallback: 'backup:gpt-5.6-sol' });
+    check('backup pointing at another provider forces pause', fb4.action === 'pause');
+
+    // presets fill role settings from CURRENT availability, hide nothing
+    const pr = applyPreset('maximum-quality', 't', ev);
+    check('preset applies', pr.ok);
+    s = getModelSettings();
+    check('preset resolved strongest verified models (no assumed names)',
+      /fable/.test(s.roles['claude.design'].model) && s.roles['codex.codeReview'].model === 'gpt-5.6-sol');
+    check('preset wrote per-role settings (nothing hidden)',
+      Object.keys((pr as any).applied).length === ROLES.length);
+    check('unknown preset rejected', !applyPreset('cheapest-paid-api', 't', ev).ok);
+
+    // reasoning enums are the provider-authoritative lists
+    check('claude enum from CLI help', JSON.stringify(REASONING.claude) === JSON.stringify(['low','medium','high','xhigh','max']));
+    check('codex enum from API error', REASONING.codex.includes('none') && REASONING.codex.includes('xhigh'));
+
+    // subscription-only invariant: nothing here can introduce a paid key
+    check('no paid API key in environment after model operations',
+      !process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY);
   }
 
   // ---- Persian reporting --------------------------------------------------

@@ -55,6 +55,20 @@ export function claudeCliVersion(): string {
   return cliVersionCache!;
 }
 
+let codexVersionCache: string | null = null;
+export function codexCliVersion(): string {
+  if (codexVersionCache) return codexVersionCache;
+  try {
+    // The codex launcher is a node script: it needs node's dir on PATH.
+    const r = require('child_process').execFileSync(CODEX_BIN, ['--version'], {
+      encoding: 'utf8', timeout: 15000,
+      env: { ...process.env, PATH: `${require('path').dirname(CODEX_BIN)}:/usr/bin:/bin` },
+    });
+    codexVersionCache = String(r).trim();
+  } catch { codexVersionCache = 'unknown'; }
+  return codexVersionCache!;
+}
+
 export type AgentName = 'claude' | 'codex' | 'claude-code';
 
 export interface AgentSpec {
@@ -67,13 +81,20 @@ export interface AgentSpec {
   readOnly?: boolean;
   taskId: string;
   phase: string;
-  /** Claude model override; defaults to CLAUDE_MODEL. Ignored for codex. */
+  /** Model override for either provider; defaults: CLAUDE_MODEL / codex CLI default. */
   model?: string;
+  /** Role id from the model registry (e.g. claude.design) — observability only here. */
+  role?: string;
+  /** Reasoning effort; provider-validated upstream. null/undefined = provider default. */
+  reasoning?: string | null;
 }
 
 function argvFor(spec: AgentSpec): string[] {
   if (spec.agent === 'codex') {
-    return [CODEX_BIN, 'exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', spec.prompt];
+    return [CODEX_BIN, 'exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check',
+      ...(spec.model ? ['-m', spec.model] : []),
+      ...(spec.reasoning ? ['-c', `model_reasoning_effort=${spec.reasoning}`] : []),
+      spec.prompt];
   }
   const tools = spec.agent === 'claude-code' && !spec.readOnly
     ? ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash']
@@ -81,6 +102,7 @@ function argvFor(spec: AgentSpec): string[] {
   return [
     CLAUDE_BIN, '-p', spec.prompt,
     '--model', spec.model ?? CLAUDE_MODEL,
+    ...(spec.reasoning ? ['--effort', spec.reasoning] : []),
     '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
     '--permission-mode', spec.agent === 'claude-code' ? 'acceptEdits' : 'manual',
     '--allowed-tools', tools.join(' '),
@@ -90,11 +112,46 @@ function argvFor(spec: AgentSpec): string[] {
 interface StreamState {
   finalEnvelope: string | null;
   effectiveModel: string | null;
+  codexThreadId: string | null;
   assistantTexts: string[];
   rateLimited: boolean;
   textBuf: string;
   thinkingTokens: number;
   firstChunkAt: number | null;
+}
+
+/**
+ * Effective codex model, read from the session rollout's turn_context — the
+ * only place codex-cli 0.147.0 records which model actually served the turn
+ * (verified on this host: payload.model = "gpt-5.6-sol").
+ */
+export function codexEffectiveModel(threadId: string | null): string | null {
+  if (!threadId || !/^[a-f0-9-]{16,64}$/i.test(threadId)) return null;
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const root = path.join(process.env.AI_CODEX_HOME ?? '/home/aiaccounting/.codex', 'sessions');
+    const days: string[] = [];
+    for (const y of fs.readdirSync(root).sort().slice(-2)) {
+      for (const m of fs.readdirSync(path.join(root, y)).sort().slice(-2)) {
+        for (const d of fs.readdirSync(path.join(root, y, m)).sort().slice(-3)) {
+          days.push(path.join(root, y, m, d));
+        }
+      }
+    }
+    for (const day of days.reverse()) {
+      const f = fs.readdirSync(day).find((x: string) => x.includes(threadId));
+      if (!f) continue;
+      for (const line of fs.readFileSync(path.join(day, f), 'utf8').split('\n')) {
+        if (!line.includes('"turn_context"')) continue;
+        try {
+          const o = JSON.parse(line);
+          if (o?.type === 'turn_context' && o?.payload?.model) return String(o.payload.model);
+        } catch { /* skip */ }
+      }
+    }
+  } catch { /* best effort */ }
+  return null;
 }
 
 /** Turns one provider JSONL line into zero-or-more live chunks. */
@@ -111,7 +168,10 @@ function ingestLine(
 
   if (spec.agent === 'codex') {
     switch (ev.type) {
-      case 'thread.started': emit('lifecycle', 'session started'); break;
+      case 'thread.started':
+        st.codexThreadId = String(ev.thread_id ?? '') || null;
+        emit('lifecycle', 'session started');
+        break;
       case 'turn.started': emit('lifecycle', 'turn started'); break;
       case 'item.started':
       case 'item.updated':
@@ -213,7 +273,7 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
   return new Promise((resolve) => {
     const argv = argvFor(spec);
     const started = Date.now();
-    const st: StreamState = { finalEnvelope: null, effectiveModel: null, assistantTexts: [], rateLimited: false, textBuf: '', thinkingTokens: 0, firstChunkAt: null };
+    const st: StreamState = { finalEnvelope: null, effectiveModel: null, codexThreadId: null, assistantTexts: [], rateLimited: false, textBuf: '', thinkingTokens: 0, firstChunkAt: null };
     const emit = (kind: string, text: string) => stream.append(spec.taskId, spec.agent, kind, text, spec.phase);
 
     stream.append(spec.taskId, spec.agent, 'lifecycle', `● started (${spec.phase})`, spec.phase);
@@ -286,10 +346,15 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
         attempts: 1,
         usage: null,
         firstChunkMs: st.firstChunkAt ? st.firstChunkAt - started : undefined,
-        requestedModel: spec.agent === 'codex' ? 'codex' : (spec.model ?? CLAUDE_MODEL),
-        effectiveModel: spec.agent === 'codex' ? 'codex' : (st.effectiveModel ?? undefined),
-        cliVersion: spec.agent === 'codex' ? undefined : claudeCliVersion(),
-        authMode: 'subscription-cli',
+        requestedModel: spec.agent === 'codex' ? (spec.model ?? 'codex-default') : (spec.model ?? CLAUDE_MODEL),
+        effectiveModel: spec.agent === 'codex'
+          ? (codexEffectiveModel(st.codexThreadId) ?? undefined)
+          : (st.effectiveModel ?? undefined),
+        cliVersion: spec.agent === 'codex' ? codexCliVersion() : claudeCliVersion(),
+        authMode: spec.agent === 'codex' ? 'chatgpt-subscription' : 'subscription-cli',
+        role: spec.role,
+        reasoningEffort: spec.reasoning ?? undefined,
+        provider: spec.agent,
       });
     });
     child.on('error', (err) => {

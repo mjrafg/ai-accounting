@@ -35,6 +35,7 @@ export const RESUMABLE_STATES: TaskState[] = [
 
 export type EventType =
   | 'TASK_CREATED'
+  | 'TASK_MODEL_POLICY'
   | 'STATE_CHANGED'
   | 'AGENT_STARTED'
   | 'AGENT_FINISHED'
@@ -163,6 +164,9 @@ export interface AgentRunResult {
   effectiveModel?: string;
   cliVersion?: string;
   authMode?: string;
+  role?: string;
+  reasoningEffort?: string;
+  provider?: string;
 }
 
 export interface CheckResult {
