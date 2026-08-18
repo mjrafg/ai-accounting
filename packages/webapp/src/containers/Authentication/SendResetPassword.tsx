@@ -1,3 +1,18 @@
+/**
+ * Password-reset request page of the authentication shell.
+ *
+ * Exports `SendResetPassword`, lazily mounted at `/auth/send_reset_password`
+ * by `@/routes/authentication` and rendered by `Authentication.tsx`, which
+ * supplies the page background, logo, `AuthMetaBootProvider` and route
+ * transitions around it.
+ *
+ * Frames its content with the shared `AuthInsider` layout plus an
+ * `AuthInsiderCard`, drives `SendResetPasswordForm` through Formik with
+ * `SendResetPasswordSchema`, and asks the API to email a reset link via the
+ * `useAuthSendResetPassword` mutation before redirecting to `/auth/login`. The
+ * emailed link lands on the `/auth/reset_password/:token` page. The footer
+ * hides the sign-up link when `useAuthMetaBoot` reports `signupDisabled`.
+ */
 import { Intent } from '@blueprintjs/core';
 import { Formik, FormikHelpers } from 'formik';
 import intl from 'react-intl-universal';

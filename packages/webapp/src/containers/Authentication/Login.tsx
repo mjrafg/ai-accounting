@@ -1,3 +1,16 @@
+/**
+ * Sign-in page of the authentication shell.
+ *
+ * Exports `Login`, lazily mounted at `/auth/login` by `@/routes/authentication`
+ * and rendered by `Authentication.tsx`, which supplies the page background,
+ * logo, `AuthMetaBootProvider` and route transitions around it.
+ *
+ * Frames its content with the shared `AuthInsider` layout plus an
+ * `AuthInsiderCard`, drives `LoginForm` through Formik with `LoginSchema`, and
+ * submits credentials via the `useAuthLogin` mutation, surfacing failures as
+ * toasts. The footer links to `/auth/register` and `/auth/send_reset_password`,
+ * hiding the sign-up link when `useAuthMetaBoot` reports `signupDisabled`.
+ */
 import { Formik, FormikHelpers } from 'formik';
 import { Link } from 'react-router-dom';
 import {
