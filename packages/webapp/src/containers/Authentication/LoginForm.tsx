@@ -51,13 +51,19 @@ export function LoginForm({ isSubmitting }: { isSubmitting: boolean }) {
   // The accessible name deliberately avoids the word "password" so it does not
   // collide with the password input when queried by label.
   const passwordRevealer = (
-    <Tooltip2 content={`${showPassword ? 'Hide' : 'Show'} Password`}>
+    <Tooltip2
+      content={intl.get(
+        showPassword ? 'login_hide_password' : 'login_show_password',
+      )}
+    >
       <Button
         type={'button'}
         icon={showPassword ? 'eye-off' : 'eye-open'}
         minimal={true}
         onClick={handleLockClick}
-        aria-label={showPassword ? 'Hide characters' : 'Show characters'}
+        aria-label={intl.get(
+          showPassword ? 'login_hide_characters' : 'login_show_characters',
+        )}
         aria-pressed={showPassword}
         data-testId={'login-password-revealer'}
       />
