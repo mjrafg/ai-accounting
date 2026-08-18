@@ -80,6 +80,7 @@ export function LoginForm({ isSubmitting }: { isSubmitting: boolean }) {
         <FInputGroup
           name={'crediential'}
           large={true}
+          leftIcon={'envelope'}
           autoComplete={'email'}
           inputMode={'email'}
           {...email.inputProps}
@@ -94,6 +95,7 @@ export function LoginForm({ isSubmitting }: { isSubmitting: boolean }) {
         <FInputGroup
           name={'password'}
           large={true}
+          leftIcon={'lock'}
           type={showPassword ? 'text' : 'password'}
           autoComplete={'current-password'}
           rightElement={passwordRevealer}

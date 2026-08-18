@@ -158,6 +158,30 @@ test.describe('authentication', () => {
       await page.close();
     });
 
+    test('should render the field icons inside their input groups.', async ({
+      browser,
+    }) => {
+      const page = await newUnauthenticatedPage(browser);
+      await page.goto('/auth/login');
+      await page.getByTestId('login-submit').waitFor();
+
+      const form = page.locator('form');
+      // Decorative icons: Blueprint renders them aria-hidden, so the labelled
+      // inputs stay the only accessible handles on the fields.
+      const envelope = form.locator('.bp4-input-group .bp4-icon-envelope');
+      const lock = form.locator('.bp4-input-group .bp4-icon-lock');
+
+      await expect(envelope).toHaveCount(1);
+      await expect(lock).toHaveCount(1);
+      await expect(envelope).toHaveAttribute('aria-hidden', 'true');
+      await expect(lock).toHaveAttribute('aria-hidden', 'true');
+
+      await expect(page.getByLabel('Email Address')).toBeVisible();
+      await expect(page.getByLabel('Password')).toBeVisible();
+
+      await page.close();
+    });
+
     test('should be usable on a mobile viewport without horizontal overflow.', async ({
       browser,
     }) => {
