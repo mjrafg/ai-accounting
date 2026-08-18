@@ -69,15 +69,43 @@ function AuthenticationRoutes() {
   );
 }
 
-const AuthPage = styled.div``;
+const AuthPage = styled.div`
+  --x-auth-background: linear-gradient(180deg, #fafbfc 0%, #eef1f6 100%);
+
+  .bp4-dark & {
+    --x-auth-background: radial-gradient(
+        120% 75% at 50% 0%,
+        rgba(138, 187, 255, 0.09) 0%,
+        rgba(138, 187, 255, 0) 62%
+      ),
+      var(--color-dark-gray1);
+  }
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 56px 20px;
+  background: var(--x-auth-background);
+
+  @media (max-width: 480px) {
+    justify-content: flex-start;
+    padding: 36px 16px 28px;
+  }
+`;
+
+// Fluid width so narrow phones never overflow horizontally.
 const AuthInsider = styled.div`
-  width: 384px;
+  width: min(420px, 100%);
   margin: 0 auto;
-  margin-bottom: 40px;
-  padding-top: 80px;
 `;
 
 const AuthLogo = styled.div`
   text-align: center;
-  margin-bottom: 40px;
+  margin-bottom: 30px;
+
+  svg {
+    max-width: 100%;
+    height: auto;
+  }
 `;

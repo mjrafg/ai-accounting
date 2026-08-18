@@ -1,6 +1,9 @@
 import { Formik, FormikHelpers } from 'formik';
 import { Link } from 'react-router-dom';
 import {
+  AuthCardHeading,
+  AuthCardSubtitle,
+  AuthCardTitle,
   AuthFooterLinks,
   AuthFooterLink,
   AuthInsiderCard,
@@ -49,6 +52,15 @@ export function Login() {
   return (
     <AuthInsider>
       <AuthInsiderCard>
+        <AuthCardHeading>
+          <AuthCardTitle>
+            <T id={'log_in'} />
+          </AuthCardTitle>
+          <AuthCardSubtitle>
+            <T id={'login_welcome_back_subheading'} />
+          </AuthCardSubtitle>
+        </AuthCardHeading>
+
         <Formik
           initialValues={initialValues}
           validationSchema={LoginSchema}

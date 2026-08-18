@@ -1,3 +1,14 @@
+// The dashboard shell pins a desktop-sized canvas (`.App { min-width: 1100px }`)
+// and locks body scrolling; neither fits the authentication screens, which are a
+// single centered column that has to stay usable on narrow phones.
+body.authentication {
+  overflow-y: auto;
+
+  .App {
+    min-width: 0;
+  }
+}
+
 .authTransition {
   &-enter {
     opacity: 0;
