@@ -211,6 +211,24 @@ test.describe('authentication', () => {
         'Password is a required field'
       );
     });
+    // Runs before the signup test on purpose: a successful signup leaves an
+    // authenticated session on this page, so later visits to /auth/register
+    // are redirected away by the guard.
+    test('should toggle the password visibility.', async () => {
+      const form = authPage.locator('form');
+      const password = form.getByLabel('Password');
+      await password.fill('secret-value');
+
+      await expect(password).toHaveAttribute('type', 'password');
+
+      await authPage.getByTestId('register-password-revealer').click();
+      await expect(password).toHaveAttribute('type', 'text');
+      await expect(password).toHaveValue('secret-value');
+
+      await authPage.getByTestId('register-password-revealer').click();
+      await expect(password).toHaveAttribute('type', 'password');
+    });
+
     test('should signup successfully.', async () => {
       const form = authPage.locator('form');
       await form.getByLabel('First Name').click();
