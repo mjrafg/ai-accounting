@@ -1,3 +1,18 @@
+/**
+ * Password-reset completion page of the authentication shell.
+ *
+ * Exports `ResetPassword`, lazily mounted at `/auth/reset_password/:token` by
+ * `@/routes/authentication` and rendered by `Authentication.tsx`, which
+ * supplies the page background, logo, `AuthMetaBootProvider` and route
+ * transitions around it.
+ *
+ * Reads the `:token` route param via `useParams`, frames its content with the
+ * shared `AuthInsider` layout plus an `AuthInsiderCard`, drives
+ * `ResetPasswordForm` through Formik with `ResetPasswordSchema`, and submits
+ * the new password with the token through the `useAuthResetPassword` mutation.
+ * Both success and an invalid token redirect back to `/auth/login`. The footer
+ * hides the sign-up link when `useAuthMetaBoot` reports `signupDisabled`.
+ */
 import { Intent } from '@blueprintjs/core';
 import { Formik, FormikHelpers } from 'formik';
 import intl from 'react-intl-universal';

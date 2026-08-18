@@ -1,3 +1,18 @@
+/**
+ * Sign-up page of the authentication shell.
+ *
+ * Exports `RegisterUserForm`, lazily mounted at `/auth/register` by
+ * `@/routes/authentication` and rendered by `Authentication.tsx`, which
+ * supplies the page background, logo, `AuthMetaBootProvider` and route
+ * transitions around it.
+ *
+ * Frames its content with the shared `AuthInsider` layout plus an
+ * `AuthInsiderCard`, drives `RegisterForm` through Formik with
+ * `RegisterSchema`, then submits via the `useAuthRegister` mutation and, on
+ * success, signs the new user in immediately with `useAuthLogin`. Registration
+ * failures are mapped onto form fields and toasts. The footer links back to
+ * `/auth/login` and `/auth/send_reset_password`.
+ */
 import { Intent } from '@blueprintjs/core';
 import { Formik, FormikHelpers } from 'formik';
 import intl from 'react-intl-universal';
