@@ -25,6 +25,8 @@ import { automaticDeploymentEnabled } from './settings';
 import { generateReport } from './report';
 import * as models from './models';
 import * as graphify from './graphify';
+import * as ctx from './context';
+import { buildTaskPack, buildFixPack, buildCodexMap } from './contextbuild';
 import { eventCoupling } from './eventindex';
 import { ToolEvidence, reconcileClaims, findingIsSupported } from './toolevidence';
 
@@ -273,11 +275,27 @@ export class Orchestrator {
     if (gfyStatus && !spec.prompt.includes('GRAPHIFY STATUS')) {
       runSpec = { ...runSpec, prompt: `${gfyStatus}\n\n${runSpec.prompt}` };
     }
+    // Structured Context Memory. Codex receives the structural MAP only —
+    // never another agent's conclusions — so reviewer independence survives
+    // the optimisation.
+    const pack = spec.contextPack ?? null;
+    if (pack && !spec.prompt.includes('TASK CONTEXT') && !spec.prompt.includes('FIX CONTEXT')
+        && !spec.prompt.includes('STRUCTURAL MAP')) {
+      runSpec = { ...runSpec, prompt: `${pack.text}\n\n${runSpec.prompt}` };
+    }
     const startedAt = new Date().toISOString();
     this.events.append({ taskId, type: 'AGENT_STARTED', agent: spec.agent as any, phase, payload: {
       subPhase: spec.phase, role: spec.role ?? null, provider: spec.agent,
       requestedModel: runSpec.model ?? null, reasoningEffort: runSpec.reasoning ?? null, startedAt,
-      graphifyStatus: gfyStatus ? gfyStatus.split('\n').slice(1).join('; ') : null } });
+      graphifyStatus: gfyStatus ? gfyStatus.split('\n').slice(1).join('; ') : null,
+      contextPackUsed: !!pack,
+      contextPackType: pack?.type ?? null,
+      contextBytes: pack?.bytes ?? 0,
+      contextTokensApprox: pack?.tokensApprox ?? 0,
+      contextEntries: pack?.entries ?? 0,
+      contextCounts: pack?.counts ?? null,
+      contextCondensed: pack?.condensed ?? false,
+      contextBaseSha: rec0?.baseSha ?? null } });
 
     const onRetry = (kind: string, err: string) => {
       this.events.append({ taskId, type: 'NOTE', agent: spec.agent as any, phase, attempt: 2,
@@ -318,6 +336,13 @@ export class Orchestrator {
       }
     }
 
+    // A contradiction is a data-quality signal about our own memory: it marks
+    // the entry and never interrupts the owner by itself.
+    const claimedDisputes = ((res.structured as any)?.contextDisputes ?? []) as ctx.Dispute[];
+    const disputes = Array.isArray(claimedDisputes) && claimedDisputes.length
+      ? ctx.applyDisputes(taskId, claimedDisputes, this.events, `${spec.agent}/${spec.role ?? spec.phase}`)
+      : { applied: 0, unknown: [] as string[] };
+
     this.events.append({
       taskId, type: res.ok ? 'AGENT_FINISHED' : 'AGENT_FAILED', agent: spec.agent as any, phase,
       attempt: res.attempts,
@@ -330,6 +355,12 @@ export class Orchestrator {
         role: spec.role ?? null, provider: spec.agent,
         reasoningEffort: runSpec.reasoning ?? null,
         fallbackModel, startedAt, finishedAt: new Date().toISOString(),
+        contextPackUsed: !!pack, contextPackType: pack?.type ?? null,
+        contextTokensApprox: pack?.tokensApprox ?? 0, contextEntries: pack?.entries ?? 0,
+        contextDisputes: disputes.applied, contextDisputesUnknown: disputes.unknown.length,
+        filesInspected: res.toolEvidence?.filesInspected?.length ?? 0,
+        toolCalls: res.toolEvidence?.toolCallCount ?? 0,
+        graphifyUsed: res.toolEvidence?.graphifyUsed ?? false,
       },
     });
     return res;
@@ -407,6 +438,7 @@ export class Orchestrator {
       const res = await this.agent(taskId, {
         agent: 'claude', cwd, readOnly: true, phase: 'design/claude', role: 'claude.design',
         timeoutMs: 15 * 60_000,
+        contextPack: buildTaskPack(this.events, taskId, cwd),
         requiredKeys: ['scopeAllowlist', 'plan', 'invariants', 'predictions', 'requiredTests', 'acceptance'],
         prompt: designPrompt(rec, investigation),
       }, 'design');
@@ -448,6 +480,7 @@ export class Orchestrator {
       if (!done) {
         const impl = await this.agent(taskId, {
           agent: 'claude-code', cwd, phase: 'implement', role: 'claudeCode.implementation', timeoutMs: 40 * 60_000,
+          contextPack: buildTaskPack(this.events, taskId, cwd),
           requiredKeys: ['status', 'filesChanged'],
           prompt: implementPrompt(rec, design),
         }, 'implement');
@@ -680,6 +713,7 @@ export class Orchestrator {
     const res = await this.agent(taskId, {
       agent: 'claude', cwd, readOnly: true, phase: 'investigation/claude', role: 'claude.investigation',
       timeoutMs: 20 * 60_000, requiredKeys: ['candidates'],
+      contextPack: buildTaskPack(this.events, taskId, cwd),
       prompt: investigationPrompt(rec, cwd, graphContext),
     }, 'investigation');
     if (!res.ok || !res.structured) {
@@ -856,9 +890,20 @@ export class Orchestrator {
   private async fixCycle(taskId: string, cwd: string, rec: TaskRecord, design: DesignRevision,
     fixes: Finding[], reason: string): Promise<'ok' | TaskState> {
     this.setState(taskId, this.task(taskId)!.state, 'FIX', 'fix', reason.slice(0, 40));
+    // The repair run receives the ADJUDICATED scope, saved for audit, rather
+    // than the reviewer's raw proposal.
+    const fixPack = buildFixPack(this.events, taskId, cwd, fixes.map((f) => f.findingId));
+    if (fixPack) {
+      for (const f of fixes) ctx.saveFixContext(taskId, f.findingId, fixPack.body);
+      this.events.append({ taskId, type: 'EVIDENCE', phase: 'fix', payload: {
+        fixContext: { findings: fixes.map((f) => f.findingId), entries: fixPack.rendered.entries,
+          tokensApprox: fixPack.rendered.tokensApprox,
+          divergences: fixPack.body.findings.filter((f: any) => f.adjudicationDivergence).map((f: any) => f.findingId) } } });
+    }
     const res = await this.agent(taskId, {
       agent: 'claude-code', cwd, phase: 'fix', role: 'claudeCode.repair', timeoutMs: 25 * 60_000,
       requiredKeys: ['status', 'filesChanged'],
+      contextPack: fixPack?.rendered ?? null,
       prompt: fixPrompt(rec, design, fixes, reason),
     }, 'fix');
     if (res.rateLimited) return this.pauseRateLimit(taskId, 'FIX', 'fix');
@@ -882,6 +927,10 @@ export class Orchestrator {
       const revStartedAt = new Date().toISOString();
       const rev = await this.agent(taskId, {
         agent: 'codex', cwd, phase: `review/cycle-${cycle + 1}`, role: 'codex.codeReview', timeoutMs: 20 * 60_000,
+        contextPack: buildCodexMap(this.events, taskId, cwd, {
+          graphFiles: reviewCtx.graphify ? graphify.filesFromAffected(reviewCtx.graphify.out) : [],
+          protectedPaths: policy.PROTECTED_PATHS,
+        }),
         requiredKeys: ['findings'],
         prompt: reviewPrompt(rec, design, diff, reviewCtx),
       }, 'review');
@@ -1241,8 +1290,11 @@ scenario, evidence from CURRENT source, and a deterministic reproduction. Never
 assert library/compiler/runtime behaviour from memory — run it and quote output.
 If nothing genuine survives, return an empty candidates array; do not invent one.
 
+If any statement in the context block above disagrees with current source, report it in contextDisputes.
+
 Reply ONLY JSON:
 {"evidence": {"sourceInspected": true, "filesInspected": ["packages/..."], "commandsExecuted": ["..."], "graphifyUsed": false, "runtimeVerified": true, "evidenceSummary": "..."},
+ "contextDisputes": [],
  "candidates": [{"title": "...", "file": "packages/...", "incorrectBehaviour": "...", "userScenario": "...", "reproduction": "exact command or spec", "reproductionOutput": "what it printed", "confidence": "high|medium|low"}]}
 
 Your evidence block is cross-checked against your actual tool executions.`;
@@ -1358,8 +1410,12 @@ DESIGN: ${JSON.stringify(d).slice(0, 6000)}
 DIFF (task worktree vs base):
 ${diff}
 
+If any statement in the context block above disagrees with what you actually observe in current source, report it (this corrects our records; it does not change your task):
+"contextDisputes": [{"entryId": "CTX-...", "observed": "what current source shows", "evidence": "file:line or command output"}]
+
 Reply ONLY JSON:
 {"evidence": {"sourceInspected": true, "filesInspected": ["packages/..."], "commandsExecuted": ["..."], "graphifyUsed": false, "runtimeVerified": false, "evidenceSummary": "one line"},
+ "contextDisputes": [],
  "findings": [{"findingId": "R-1", "severity": "...", "category": "...", "claim": "...", "file": "...", "scenario": "...", "confidence": "...", "verifiedBy": "what you actually ran or read"}]}
 
 Your evidence block is cross-checked against your real tool executions. Claiming a tool you did not run is recorded as TOOL_CLAIM_MISMATCH, and an IMPORTANT/CRITICAL source claim with no inspection and no executed verification is downgraded to UNVERIFIED and cannot block on its own.`;

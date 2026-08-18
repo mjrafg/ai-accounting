@@ -625,6 +625,145 @@ async function main(): Promise<number> {
     check('unrelated non-source change couples nothing', none.events.length === 0 && none.specs.length === 0);
   }
 
+  // ---- Structured Context Memory (Phase 1) --------------------------------
+  section('context memory: descriptive-only, typed verification, disputes, budget, independence');
+  {
+    const cx = require('./core/context') as typeof import('./core/context');
+    const cb = require('./core/contextbuild') as typeof import('./core/contextbuild');
+    const wt = fs.mkdtempSync(path.join(TMP, 'ctx-'));
+    fs.mkdirSync(path.join(wt, 'packages/server/src/modules/Inv'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'packages/server/src/modules/Inv/Inv.service.ts'),
+      "import { events } from '@/common/events';\nexport class Inv { go(){ this.emitter.emitAsync(events.saleInvoice.onCreated, {}); } }\n");
+    fs.mkdirSync(path.join(wt, 'packages/server/src/modules/Led'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'packages/server/src/modules/Led/Sub.ts'),
+      "import { events } from '@/common/events';\nexport class Sub { @OnEvent(events.saleInvoice.onCreated) h(){} }\n");
+    fs.writeFileSync(path.join(wt, 'packages/server/src/modules/Led/Sub.spec.ts'), "describe('Sub',()=>{it('x',()=>{})});\n");
+
+    // Memory describes; it never instructs.
+    check('descriptive statement accepted', cx.isDescriptive('Login uses useAuthLogin({ email, password }).').ok);
+    for (const bad of ['DO NOT change the login form', 'You must preserve the toast behaviour',
+      'Never modify Auth.scss', 'Always keep the eye-icon revealer']) {
+      check(`imperative rejected: "${bad.slice(0, 28)}..."`, !cx.isDescriptive(bad).ok);
+    }
+    let threw = false;
+    try { cx.makeEntry({ kind: 'FACT', observation: 'Do not touch Login.tsx', verification: 'OBSERVED',
+      evidence: 'x', checkedBy: null, asOfSha: 'a'.repeat(40), taskId: 'TASK-V2-9701' }); }
+    catch { threw = true; }
+    check('policy language cannot be written into memory at all', threw);
+
+    // CHECKED must name the deterministic check that proves it.
+    const noProof = cx.makeEntry({ kind: 'OBSERVATION', observation: 'Login renders a password revealer.',
+      verification: 'CHECKED', evidence: 'seen in source', checkedBy: null, asOfSha: 'a'.repeat(40), taskId: 'TASK-V2-9701' });
+    check('CHECKED without a named check degrades to OBSERVED', noProof.verification === 'OBSERVED');
+    const proven = cx.makeEntry({ kind: 'FACT', observation: 'Targeted spec passes for the auth module.',
+      verification: 'CHECKED', evidence: '17 passed', checkedBy: 'targeted-tests', asOfSha: 'a'.repeat(40), taskId: 'TASK-V2-9701' });
+    check('CHECKED retained when a check is named', proven.verification === 'CHECKED' && proven.checkedBy === 'targeted-tests');
+
+    // Build a real task and derive packs from its event log.
+    const ev = new EventStore();
+    const tid = 'TASK-V2-9702';
+    const BASE = 'f'.repeat(40);
+    ev.append({ taskId: tid, type: 'TASK_CREATED', payload: { title: 'Modernize login presentation',
+      description: 'd', risk: 'medium', branch: 'b', baseSha: BASE, worktree: wt } });
+    ev.append({ taskId: tid, type: 'STATE_CHANGED', payload: { from: 'NEW', to: 'IMPLEMENT' } });
+    ev.append({ taskId: tid, type: 'CODE_CHANGE', payload: { headSha: 'abc123',
+      filesChanged: ['packages/server/src/modules/Inv/Inv.service.ts'] } });
+    ev.append({ taskId: tid, type: 'TEST_RESULT', payload: { name: 'targeted-tests', ok: true, detail: '17 passed', tier: 'fast-gate' } });
+    ev.append({ taskId: tid, type: 'EVIDENCE', phase: 'verify', payload: { impactSpecs: ['packages/server/src/modules/Led/Sub.spec.ts'] } });
+    ev.append({ taskId: tid, type: 'EVIDENCE', agent: 'claude', phase: 'design', payload: { reviewEvidence: {
+      sourceInspected: true, filesInspected: ['packages/webapp/src/containers/Authentication/Login.tsx'],
+      commandsExecuted: [], graphifyUsed: false, graphSourceSha: null, runtimeVerified: false,
+      toolCallCount: 3, claimMismatch: [] } } });
+    ev.append({ taskId: tid, type: 'FINDING', phase: 'review', payload: { findings: [{ findingId: 'R-1',
+      severity: 'IMPORTANT', category: 'ui', claim: 'The confirm field reuses the new_password label.',
+      file: 'packages/webapp/src/containers/Authentication/ResetPasswordForm.tsx', status: 'UNRESOLVED' }] } });
+    ev.append({ taskId: tid, type: 'ADJUDICATION', phase: 'review', payload: { findingId: 'R-1', status: 'FIX',
+      decisionSource: 'agent', evidence: 'Label the second field with confirm_password; the reviewer also proposed renaming the schema key, which is out of scope.' } });
+
+    const taskPack = cb.buildTaskPack(ev, tid, wt)!;
+    check('TASK pack builds from machine evidence', !!taskPack && taskPack.type === 'TASK');
+    check('TASK pack carries the base SHA', taskPack.text.includes(BASE));
+    check('TASK pack lists the changed file with a content hash', /Inv\.service\.ts \(sha256:[0-9a-f]{12}\)/.test(taskPack.text));
+    check('TASK pack records previously inspected files', taskPack.text.includes('Login.tsx'));
+    check('TASK pack carries deterministic results', taskPack.text.includes('targeted-tests'));
+    check('TASK pack includes event coupling', /events\.saleInvoice\.onCreated/.test(taskPack.text));
+    check('TASK pack states current source is authoritative', /Current source is authoritative/i.test(taskPack.text));
+    check('TASK pack contains no imperative policy', cx.isDescriptive(
+      taskPack.text.split('\n').filter((l) => l.startsWith('- [')).join(' ')).ok);
+    check('TASK pack stays inside the token budget', taskPack.tokensApprox <= cx.TOKEN_BUDGET,
+      `${taskPack.tokensApprox} tokens`);
+
+    // FIX pack: adjudicated scope, with the reviewer's raw wording kept only as provenance.
+    const fix = cb.buildFixPack(ev, tid, wt, ['R-1'])!;
+    check('FIX pack builds', !!fix && fix.rendered.type === 'FIX');
+    check('FIX pack carries the adjudicated required change',
+      fix.body.findings[0].requiredChange.includes('confirm_password'));
+    check('FIX pack keeps the finder statement as provenance',
+      fix.body.findings[0].finderStatement.includes('reuses the new_password label'));
+    check('FIX pack records adjudication divergence when the framing was corrected',
+      !!fix.body.findings[0].adjudicationDivergence);
+    check('FIX pack names the relevant tests', fix.rendered.text.includes('Sub.spec.ts'));
+    check('FIX pack is small', fix.rendered.tokensApprox <= cx.TOKEN_BUDGET);
+
+    // Codex independence: the MAP must carry structure and nothing else.
+    const map = cb.buildCodexMap(ev, tid, wt, { graphFiles: [], protectedPaths: ['packages/server/test/e2e-baseline.json'] })!;
+    check('MAP pack builds', !!map && map.type === 'MAP');
+    check('MAP carries changed files and hashes', /Inv\.service\.ts \(sha256:/.test(map.text));
+    check('MAP carries event coupling', /events\.saleInvoice\.onCreated/.test(map.text));
+    check('MAP carries protected paths', map.text.includes('e2e-baseline.json'));
+    check('MAP excludes prior findings', !map.text.includes('new_password label'));
+    const mapEntries = map.text.split('\n').filter((l) => l.startsWith('- ['));
+    check('MAP excludes adjudications', !mapEntries.some((l) => /adjudicat/i.test(l)));
+    check('MAP excludes design conclusions', !mapEntries.some((l) => /plan:|design decision/i.test(l)));
+    check('MAP excludes SUMMARY conclusions', !/\[SUMMARY\//.test(map.text));
+    check('MAP states independence expectation', /independent/i.test(map.text));
+
+    // Disputes: contradiction marks the entry and never escalates by itself.
+    const stored = cx.loadTaskContext(tid)!;
+    const target = stored.entries.find((e) => e.observation.includes('Inv.service.ts'))!;
+    const res = cx.applyDisputes(tid, [{ entryId: target.id, observed: 'file no longer present',
+      evidence: 'ls shows it was renamed' }], ev, 'codex/codex.codeReview');
+    check('dispute applied to the named entry', res.applied === 1);
+    const after = cx.loadTaskContext(tid)!;
+    check('disputed entry is marked CONTRADICTED',
+      after.entries.find((e) => e.id === target.id)!.verification === 'CONTRADICTED');
+    check('CONTEXT_CONTRADICTED event recorded',
+      ev.read(tid).some((e) => e.type === 'CONTEXT_CONTRADICTED'));
+    check('contradiction alone does not request the owner',
+      !ev.read(tid).some((e) => e.type === 'STATE_CHANGED' && (e.payload as any).to === 'AWAITING_HUMAN'));
+    const repack = cb.buildTaskPack(ev, tid, wt)!;
+    check('contradicted entry is excluded from later packs',
+      !repack.text.includes(target.observation));
+    check('a re-derived fact does not resurrect a contradicted entry',
+      cx.loadTaskContext(tid)!.entries.find((e) => e.id === target.id)!.verification === 'CONTRADICTED');
+    check('reverify with a named check is the only way back',
+      cx.reverify(tid, target.id, 'targeted-tests', 'file present again') &&
+      cx.loadTaskContext(tid)!.entries.find((e) => e.id === target.id)!.verification === 'CHECKED');
+    check('an unknown entry id is reported, not silently applied',
+      cx.applyDisputes(tid, [{ entryId: 'CTX-nope', observed: 'x', evidence: 'y' }], ev, 't').unknown.length === 1);
+
+    // Budget: FACTs survive condensing; SUMMARY is the first thing dropped.
+    const many = Array.from({ length: 400 }, (_, i) => cx.makeEntry({
+      kind: i % 20 === 0 ? 'SUMMARY' : 'FACT', taskId: tid, asOfSha: BASE, checkedBy: 'x',
+      verification: 'CHECKED', evidence: 'e',
+      observation: `Module packages/server/src/modules/M${i}/File${i}.ts participates in the task.` }));
+    const big = cx.render('HDR', many, 'TASK', ev, tid);
+    check('over-budget context is condensed, not silently truncated', big.condensed === true);
+    check('condensed context respects the budget', big.tokensApprox <= cx.TOKEN_BUDGET, `${big.tokensApprox} tokens`);
+    check('elided facts are announced, not silently dropped',
+      big.elided > 0 && /further recorded fact\(s\) omitted here for the context budget/.test(big.text));
+    check('CONTEXT_BUDGET_EXCEEDED is recorded', ev.read(tid).some((e) =>
+      e.type === 'NOTE' && (e.payload as any).contextBudgetExceeded));
+    check('SUMMARY entries are dropped before FACTs', big.counts.SUMMARY === 0 && big.counts.FACT > 0);
+
+    // Provenance is auditable and append-only.
+    const auditFile = path.join(process.env.AI_V2_STATE!, 'context', 'audit', 'context-events.jsonl');
+    check('context history is auditable', fs.existsSync(auditFile) &&
+      fs.readFileSync(auditFile, 'utf8').split('\n').filter(Boolean).length > 0);
+    check('every stored entry carries provenance', cx.loadTaskContext(tid)!.entries.every(
+      (e) => !!e.asOfSha && !!e.taskId && !!e.evidence && !!e.at));
+  }
+
   // ---- Graphify RUNTIME exposure (the TASK-V2-0011 regression) ------------
   section('graphify runtime: task pointer, wrapper interface, log-backed evidence, isolation');
   {

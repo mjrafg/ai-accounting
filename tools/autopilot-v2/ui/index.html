@@ -526,12 +526,50 @@ function tabLive(t) {
     ]));
     // Review evidence — rendered ONLY from machine-recorded values.
     // Attribute evidence to the agent that produced it — never show one
-    // agent's inspection record under another agent's pane.
+    // agent's inspection record under another agent's pane. Declared before the
+    // context block because both rows read from it.
     const evd = (t.evidence || []).filter(e => e.reviewEvidence && e._agent === a).pop();
+
+    // Shared indicator renderer for the evidence rows below.
+    const tick = (on, label, note) => $("span", { class: "m", style: "font-size:11.5px;color:var(--muted);margin-right:12px",
+      text: `${label} ${on ? "✓" : "—"}${note ? " " + note : ""}` });
+
+    // Context Memory indicators, from the agent's own start/finish records.
+    const ri2 = runInfo[a] || {};
+    if (ri2.contextPackUsed !== undefined && ri2.contextPackUsed !== null) {
+      const cc = ri2.contextCounts || {};
+      const shaCur = !!ri2.contextBaseSha && ri2.contextBaseSha === (t.baseSha || "");
+      const crow = $("div", { style: "padding:2px 12px 6px;display:flex;flex-wrap:wrap" }, [
+        tick(!!ri2.contextPackUsed, "Context", ri2.contextPackUsed ? `(${ri2.contextPackType})` : ""),
+        tick(!!ri2.contextPackUsed, "Context entries", `(${ri2.contextEntries || 0})`),
+        tick(shaCur, "Context SHA current", ri2.contextBaseSha ? `(${String(ri2.contextBaseSha).slice(0,9)})` : ""),
+        $("span", { class: "m", style: "font-size:11.5px;color:var(--muted);margin-right:12px",
+          text: `Context disputes ${ri2.contextDisputes || 0}` }),
+      ]);
+      pane.appendChild(crow);
+      if (ri2.contextPackUsed) {
+        const cd = $("details", { style: "padding:0 12px 6px;font-size:11.5px;color:var(--muted)" });
+        cd.appendChild($("summary", { style: "cursor:pointer", text: "Context evidence" }));
+        cd.appendChild($("dl", { class: "kv", style: "margin-top:4px" }, [
+          $("dt", { text: "TASK_BASE_SHA" }), $("dd", { class: "mono", text: ri2.contextBaseSha || "—" }),
+          $("dt", { text: "Generated at" }), $("dd", { text: ri2.startedAt ? fmt(ri2.startedAt) : "—" }),
+          $("dt", { text: "Type" }), $("dd", { text: ri2.contextPackType || "—" }),
+          $("dt", { text: "Approx tokens" }), $("dd", { text: String(ri2.contextTokensApprox || 0) +
+            (ri2.contextCondensed ? " (condensed)" : "") }),
+          $("dt", { text: "FACT / SUMMARY / OBSERVATION" }),
+          $("dd", { text: `${cc.FACT||0} / ${cc.SUMMARY||0} / ${cc.OBSERVATION||0}` }),
+          $("dt", { text: "CHECKED / OBSERVED / CONTRADICTED / UNVERIFIED" }),
+          $("dd", { text: `${cc.CHECKED||0} / ${cc.OBSERVED||0} / ${cc.CONTRADICTED||0} / ${cc.UNVERIFIED||0}` }),
+          $("dt", { text: "Graphify SHA" }), $("dd", { class: "mono", text: (evd && evd.reviewEvidence && evd.reviewEvidence.graphSourceSha) || "—" }),
+          $("dt", { text: "Event coupling included" }), $("dd", { text: ri2.contextEventCoupling ? "yes" : "see FACTs" }),
+        ]));
+        pane.appendChild(cd);
+      }
+    }
+
+
     if (evd && ri) {
       const re = evd.reviewEvidence;
-      const tick = (on, label, note) => $("span", { class: "m", style: "font-size:11.5px;color:var(--muted);margin-right:12px",
-        text: `${label} ${on ? "✓" : "—"}${note ? " " + note : ""}` });
       const shaCurrent = !!re.graphifyUsed && !!re.graphCurrent &&
         (!re.analyzedSourceSha || re.graphSourceSha === re.analyzedSourceSha);
       const row = $("div", { style: "padding:6px 12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap" }, [

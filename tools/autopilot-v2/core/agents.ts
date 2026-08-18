@@ -113,6 +113,9 @@ export interface AgentSpec {
   isCancelled?: () => boolean;
   /** Reasoning effort; provider-validated upstream. null/undefined = provider default. */
   reasoning?: string | null;
+  /** Structured Context Memory pack prepended to the prompt, if any. */
+  contextPack?: { text: string; type: string; bytes: number; tokensApprox: number; entries: number;
+    counts: Record<string, number>; condensed: boolean } | null;
 }
 
 function argvFor(spec: AgentSpec): string[] {
