@@ -56,6 +56,139 @@ test.describe('authentication', () => {
         'The email and password you entered did not match our records.'
       );
     });
+
+    test('should the email and password inputs carry autocomplete hints.', async () => {
+      await expect(authPage.getByLabel('Email Address')).toHaveAttribute(
+        'autocomplete',
+        'email'
+      );
+      await expect(authPage.getByLabel('Password')).toHaveAttribute(
+        'autocomplete',
+        'current-password'
+      );
+    });
+
+    test('should toggle the password visibility.', async () => {
+      const password = authPage.getByLabel('Password');
+      await password.fill('secret-value');
+
+      await expect(password).toHaveAttribute('type', 'password');
+
+      await authPage.getByTestId('login-password-revealer').click();
+      await expect(password).toHaveAttribute('type', 'text');
+      await expect(password).toHaveValue('secret-value');
+
+      await authPage.getByTestId('login-password-revealer').click();
+      await expect(password).toHaveAttribute('type', 'password');
+    });
+
+    test('should associate the validation message with its input.', async () => {
+      await authPage.getByRole('button', { name: 'Log in' }).click();
+
+      const email = authPage.getByLabel('Email Address');
+      await expect(email).toHaveAttribute('aria-invalid', 'true');
+      await expect(email).toHaveAttribute(
+        'aria-describedby',
+        'crediential-error'
+      );
+      await expect(authPage.locator('#crediential-error')).toHaveText(
+        'Email is a required field'
+      );
+    });
+  });
+
+  test.describe('login presentation', () => {
+    // These specs stub `/api/auth/signin` so the submitting/error presentation
+    // is deterministic; they run on their own page so the stubs never leak into
+    // the specs above.
+    const stubSignin = async (page: Page, delayMs: number) => {
+      await page.route('**/api/auth/signin', async (route) => {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            statusCode: 401,
+            error: 'Unauthorized',
+            message: 'Invalid email or password',
+            code: 'INVALID_DETAILS',
+          }),
+        });
+      });
+    };
+
+    test('should the submit button show a loading state while signing in.', async ({
+      browser,
+    }) => {
+      const page = await newUnauthenticatedPage(browser);
+      await stubSignin(page, 3000);
+      await page.goto('/auth/login');
+
+      await page.getByLabel('Email Address').fill(faker.internet.email());
+      await page.getByLabel('Password').fill(faker.internet.password());
+      await page.getByRole('button', { name: 'Log in' }).click();
+
+      const submit = page.getByTestId('login-submit');
+      await expect(submit).toHaveClass(/bp4-loading/);
+      await expect(submit).toBeDisabled();
+
+      await expect(page.locator('body')).toContainText(
+        'The email and password you entered did not match our records.'
+      );
+      await expect(submit).not.toHaveClass(/bp4-loading/);
+      await expect(submit).toBeEnabled();
+
+      await page.close();
+    });
+
+    test('should submit the form with the enter key.', async ({ browser }) => {
+      const page = await newUnauthenticatedPage(browser);
+      await stubSignin(page, 0);
+      await page.goto('/auth/login');
+
+      await page.getByLabel('Email Address').fill(faker.internet.email());
+      await page.getByLabel('Password').fill(faker.internet.password());
+      await page.getByLabel('Password').press('Enter');
+
+      await expect(page.locator('body')).toContainText(
+        'The email and password you entered did not match our records.'
+      );
+      await page.close();
+    });
+
+    test('should be usable on a mobile viewport without horizontal overflow.', async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({
+        viewport: { width: 375, height: 812 },
+        storageState: { cookies: [], origins: [] },
+      });
+      const page = await context.newPage();
+      await page.goto('/auth/login');
+      await page.getByRole('button', { name: 'Log in' }).waitFor();
+
+      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+
+      // The whole form stays inside the viewport and remains operable.
+      const card = page.locator('form');
+      const box = await card.boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+
+      await page.getByLabel('Email Address').fill('accountant@bigcapital.app');
+      await expect(page.getByLabel('Email Address')).toHaveValue(
+        'accountant@bigcapital.app'
+      );
+      await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+
+      await context.close();
+    });
   });
 
   test.describe('register', () => {
