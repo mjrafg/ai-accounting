@@ -24,6 +24,9 @@ import * as policy from './policy';
 import { automaticDeploymentEnabled } from './settings';
 import { generateReport } from './report';
 import * as models from './models';
+import * as graphify from './graphify';
+import { eventCoupling } from './eventindex';
+import { ToolEvidence, reconcileClaims, findingIsSupported } from './toolevidence';
 
 const CONTROL_REPO = process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo';
 const DEPLOY_BIN = process.env.AI_DEPLOY_BIN ?? '/srv/ai-accounting/bin/deploy-production';
@@ -359,11 +362,14 @@ export class Orchestrator {
     // ---- DESIGN ----------------------------------------------------------
     if (rec.state === 'NEW' || (rec.state === 'DESIGN' && !currentDesign(this.events, taskId))) {
       if (rec.state === 'NEW') this.setState(taskId, 'NEW', 'DESIGN', 'design', 'claude');
+      // Investigation runs FIRST for bug-hunting/root-cause tasks and feeds the
+      // architect a ranked, source-verified shortlist instead of a blank repo.
+      const investigation = await this.investigate(taskId, cwd, rec);
       const res = await this.agent(taskId, {
         agent: 'claude', cwd, readOnly: true, phase: 'design/claude', role: 'claude.design',
         timeoutMs: 15 * 60_000,
         requiredKeys: ['scopeAllowlist', 'plan', 'invariants', 'predictions', 'requiredTests', 'acceptance'],
-        prompt: designPrompt(rec),
+        prompt: designPrompt(rec, investigation),
       }, 'design');
       if (res.rateLimited) return this.pauseRateLimit(taskId, 'DESIGN', 'design');
       if (!res.ok || !res.structured) return this.escalate(taskId, 'DESIGN', `design failed [${res.failureKind}]: ${res.error}`);
@@ -541,19 +547,158 @@ export class Orchestrator {
     return design;
   }
 
-  private recordFindings(taskId: string, phase: string, raw: any[]): Finding[] {
-    const findings: Finding[] = raw.map((f: any, i: number) => ({
-      findingId: String(f.findingId ?? `${phase.toUpperCase()}-${i + 1}`),
-      severity: (['CRITICAL', 'IMPORTANT', 'SUGGESTION'].includes(f.severity) ? f.severity : 'IMPORTANT'),
-      category: String(f.category ?? 'general'),
-      claim: String(f.claim ?? ''),
-      file: f.file ? String(f.file) : undefined,
-      scenario: f.scenario ? String(f.scenario) : undefined,
-      confidence: f.confidence ? String(f.confidence) : undefined,
-      status: 'UNRESOLVED',
-    }));
+  /**
+   * Reconciles the reviewer's CLAIMED evidence against what it actually
+   * executed, and records the machine-observed version. Prose never becomes
+   * evidence: observed always wins, and overclaims are logged.
+   */
+  private recordReviewEvidence(taskId: string, phase: string, res: any): ToolEvidence {
+    const observed: ToolEvidence = res.toolEvidence ?? {
+      sourceInspected: false, filesInspected: [], commandsExecuted: [], graphifyUsed: false,
+      graphSourceSha: null, runtimeVerified: false, toolCallCount: 0, claimMismatch: [],
+    };
+    const ev = reconcileClaims(observed, (res.structured as any)?.evidence);
+    this.events.append({ taskId, type: 'EVIDENCE', phase, agent: res.provider ?? 'codex', payload: {
+      reviewEvidence: {
+        sourceInspected: ev.sourceInspected,
+        filesInspected: ev.filesInspected,
+        commandsExecuted: ev.commandsExecuted.slice(0, 20),
+        graphifyUsed: ev.graphifyUsed,
+        graphSourceSha: ev.graphSourceSha,
+        runtimeVerified: ev.runtimeVerified,
+        toolCallCount: ev.toolCallCount,
+        claimMismatch: ev.claimMismatch,
+        summary: String((res.structured as any)?.evidence?.evidenceSummary ?? '').slice(0, 300),
+      },
+    } });
+    for (const m of ev.claimMismatch) this.stream.append(taskId, 'system', 'error', m);
+    return ev;
+  }
+
+  /** Tasks whose wording asks for discovery/root-cause rather than a known change. */
+  private static INVESTIGATION_TASK =
+    /\b(find|discover|hunt)\b[^.]{0,40}\bbug|investigate|root ?cause|why (does|is|are|did)|diagnose|reproduce\b/i;
+
+  /**
+   * Bug Investigation funnel (claude.investigation, optionally corroborated by
+   * codex.investigation). Deliberately narrow: structural context → ranked
+   * hotspots → targeted source reads → a few candidates → mechanical
+   * reproduction. It must NOT read thousands of files.
+   */
+  private async investigate(taskId: string, cwd: string, rec: TaskRecord): Promise<string | null> {
+    if (!Orchestrator.INVESTIGATION_TASK.test(rec.description)) return null;
+    if (this.events.read(taskId).some((e) => e.phase === 'investigation' && e.type === 'AGENT_FINISHED')) return null;
+
+    let graphContext = '';
+    const use = graphify.graphFor(rec.baseSha);
+    if (graphify.worthUsing('claude.investigation', rec.risk, 0) && use.usable) {
+      const hubs = await graphify.query(rec.baseSha, rec.title.slice(0, 200), 1500);
+      if (hubs?.ok) {
+        graphContext = `\nGRAPHIFY STRUCTURAL CONTEXT (graph ${hubs.graphSourceSha.slice(0, 9)}, matches the code under analysis).\n` +
+          `Navigation only — confirm everything in current source:\n${hubs.out.slice(0, 3500)}\n`;
+        this.events.append({ taskId, type: 'EVIDENCE', phase: 'investigation', payload: {
+          graphify: { used: true, graphSourceSha: hubs.graphSourceSha, command: hubs.command,
+            durationMs: hubs.durationMs, analyzedSha: rec.baseSha, shaMatches: hubs.graphSourceSha === rec.baseSha } } });
+      }
+    } else {
+      this.events.append({ taskId, type: 'EVIDENCE', phase: 'investigation', payload: {
+        graphify: { used: false, reason: use.usable ? 'NOT_NEEDED' : use.reason, detail: use.usable ? '' : use.detail } } });
+    }
+
+    const res = await this.agent(taskId, {
+      agent: 'claude', cwd, readOnly: true, phase: 'investigation/claude', role: 'claude.investigation',
+      timeoutMs: 20 * 60_000, requiredKeys: ['candidates'],
+      prompt: investigationPrompt(rec, cwd, graphContext),
+    }, 'investigation');
+    if (!res.ok || !res.structured) {
+      this.events.append({ taskId, type: 'NOTE', phase: 'investigation', payload: {
+        investigationSkipped: res.error ?? 'no structured result' } });
+      return null;
+    }
+    const ev = this.recordReviewEvidence(taskId, 'investigation', res);
+    const cands = ((res.structured as any).candidates ?? []).slice(0, 5);
+    this.events.append({ taskId, type: 'EVIDENCE', phase: 'investigation', payload: {
+      investigation: { candidateCount: cands.length, candidates: cands,
+        filesInspected: ev.filesInspected.length, sourceInspected: ev.sourceInspected,
+        runtimeVerified: ev.runtimeVerified } } });
+    this.stream.append(taskId, 'system', 'lifecycle',
+      `investigation: ${cands.length} candidate(s) from ${ev.filesInspected.length} inspected file(s)`);
+    return `INVESTIGATION FINDINGS (already source-verified — do not redo this work):\n${JSON.stringify(cands, null, 1).slice(0, 5000)}`;
+  }
+
+  private recordFindings(taskId: string, phase: string, raw: any[], evidence?: ToolEvidence): Finding[] {
+    const findings: Finding[] = raw.map((f: any, i: number) => {
+      const severity = (['CRITICAL', 'IMPORTANT', 'SUGGESTION'].includes(f.severity) ? f.severity : 'IMPORTANT');
+      // Evidence gate: a material source claim raised without inspecting the
+      // source and without running any verification is UNVERIFIED. It stays on
+      // the record and can still be adjudicated, but it cannot block by itself.
+      const gate = evidence ? findingIsSupported(severity, evidence) : { supported: true, reason: '' };
+      return {
+        findingId: String(f.findingId ?? `${phase.toUpperCase()}-${i + 1}`),
+        severity,
+        category: String(f.category ?? 'general'),
+        claim: String(f.claim ?? ''),
+        file: f.file ? String(f.file) : undefined,
+        scenario: f.scenario ? String(f.scenario) : undefined,
+        confidence: f.confidence ? String(f.confidence) : undefined,
+        status: 'UNRESOLVED' as const,
+        ...(gate.supported ? {} : { unverified: true, unverifiedReason: gate.reason }),
+        ...(f.verifiedBy ? { verifiedBy: String(f.verifiedBy).slice(0, 300) } : {}),
+      };
+    });
     if (findings.length) this.events.append({ taskId, type: 'FINDING', phase, payload: { findings } });
     return findings;
+  }
+
+  /**
+   * Assembles navigation context for a review. Graphify is consulted only when
+   * it is materially useful (multi-file / high risk / investigation) and only
+   * when its graph SHA matches the code under review; otherwise the review
+   * proceeds on source inspection alone and the reason is recorded.
+   */
+  private async buildReviewContext(taskId: string, cwd: string, rec: TaskRecord, role: string): Promise<ReviewContext> {
+    const ctx: ReviewContext = { cwd, graphify: null, eventCoupling: null };
+    const changed = this.wtm.changedFiles(cwd, rec.baseSha);
+
+    // Event coupling is cheap, deterministic, and imports-blind — always useful.
+    try {
+      const ec = eventCoupling(cwd, changed);
+      if (ec.events.length || ec.coupledFiles.length) {
+        ctx.eventCoupling = [
+          `events touched: ${ec.events.join(', ') || 'none'}`,
+          ...ec.rationale.slice(0, 12),
+        ].join('\n');
+        this.events.append({ taskId, type: 'EVIDENCE', phase: 'review', payload: {
+          eventCoupling: { events: ec.events, coupledFiles: ec.coupledFiles, specs: ec.specs } } });
+      }
+    } catch { /* coupling is additive; never fail a review over it */ }
+
+    if (!graphify.worthUsing(role, rec.risk, changed.length)) {
+      this.events.append({ taskId, type: 'EVIDENCE', phase: 'review', payload: {
+        graphify: { used: false, reason: 'NOT_NEEDED', detail: `${role} on ${rec.risk} risk, ${changed.length} changed file(s)` } } });
+      return ctx;
+    }
+    const use = graphify.graphFor(rec.baseSha);
+    if (!use.usable) {
+      this.events.append({ taskId, type: 'EVIDENCE', phase: 'review', payload: {
+        graphify: { used: false, reason: use.reason, detail: use.detail, haveSha: (use as any).haveSha ?? null } } });
+      this.stream.append(taskId, 'system', 'lifecycle',
+        `graphify ${use.reason}: ${use.detail} — review continues on current source`);
+      return ctx;
+    }
+    const primary = changed[0] ? path.basename(changed[0]) : rec.title.slice(0, 60);
+    const r = await graphify.affected(rec.baseSha, primary, 2);
+    if (r?.ok) {
+      ctx.graphify = { out: r.out, graphSourceSha: r.graphSourceSha };
+      this.events.append({ taskId, type: 'EVIDENCE', phase: 'review', payload: {
+        graphify: { used: true, graphSourceSha: r.graphSourceSha, command: r.command,
+          durationMs: r.durationMs, analyzedSha: rec.baseSha,
+          shaMatches: r.graphSourceSha === rec.baseSha,
+          filesSuggested: graphify.filesFromAffected(r.out).slice(0, 25) } } });
+      this.stream.append(taskId, 'system', 'lifecycle',
+        `graphify blast radius for ${primary} (graph ${r.graphSourceSha.slice(0, 9)}, ${r.durationMs}ms)`);
+    }
+    return ctx;
   }
 
   /**
@@ -619,7 +764,7 @@ export class Orchestrator {
       this.recordRevision(taskId, d2, d2.revision, d2.appliedFindings);
     }
 
-    const impact = checks.affectedSpecs(cwd, changed);
+    const impact = checks.affectedSpecs(cwd, changed, rec.baseSha);
     this.events.append({ taskId, type: 'EVIDENCE', phase: 'verify',
       payload: { impactSpecs: impact.specs, impactRationale: impact.rationale.slice(0, 30) } });
 
@@ -660,10 +805,11 @@ export class Orchestrator {
 
     for (let cycle = 0; cycle <= budget.materialCycles; cycle++) {
       const diff = this.wtm.diff(cwd, rec.baseSha).slice(0, 350_000);
+      const reviewCtx = await this.buildReviewContext(taskId, cwd, rec, 'codex.codeReview');
       const rev = await this.agent(taskId, {
         agent: 'codex', cwd, phase: `review/cycle-${cycle + 1}`, role: 'codex.codeReview', timeoutMs: 20 * 60_000,
         requiredKeys: ['findings'],
-        prompt: reviewPrompt(rec, design, diff),
+        prompt: reviewPrompt(rec, design, diff, reviewCtx),
       }, 'review');
       if (rev.rateLimited) return this.pauseRateLimit(taskId, 'REVIEW', 'review');
       if (!rev.ok) {
@@ -671,7 +817,8 @@ export class Orchestrator {
         if (rec.risk === 'low') { this.events.append({ taskId, type: 'NOTE', payload: { reviewSkipped: rev.error } }); return 'ok'; }
         return this.escalate(taskId, 'REVIEW', `review failed [${rev.failureKind}]: ${rev.error}`);
       }
-      const findings = this.recordFindings(taskId, 'review', (rev.structured as any)?.findings ?? []);
+      const reviewEvidence = this.recordReviewEvidence(taskId, 'review', rev);
+      const findings = this.recordFindings(taskId, 'review', (rev.structured as any)?.findings ?? [], reviewEvidence);
       const material = findings.filter((f) => f.severity !== 'SUGGESTION' && policy.findingMayBlock(f) || f.severity === 'IMPORTANT');
       if (!material.length) return 'ok';
 
@@ -985,7 +1132,39 @@ export class Orchestrator {
 // Prompts — concise, risk-scaled (a two-line fix does not get a treatise)
 // ---------------------------------------------------------------------------
 
-function designPrompt(rec: TaskRecord): string {
+/**
+ * Investigation funnel. The explicit budget matters: an earlier bug-hunt task
+ * read 200+ files sequentially before producing anything.
+ */
+function investigationPrompt(rec: TaskRecord, cwd: string, graphContext: string): string {
+  return `You are the Bug Investigation role. Find real, reproducible defects — efficiently.
+
+WORKTREE (read-only, you CAN run commands): ${cwd}
+
+TASK ${rec.taskId} (risk=${rec.risk}):
+${rec.description.slice(0, 4000)}
+${graphContext}
+FUNNEL — keep to this budget, do not sequentially read the repository:
+1. use the structural context above (if present) to rank suspicious modules/hotspots
+2. open roughly 10-30 genuinely relevant files — no more
+3. narrow to 3-5 concrete candidate defects
+4. MECHANICALLY REPRODUCE each candidate: run a node one-liner, an existing spec,
+   or tsc. Discard anything you cannot demonstrate.
+5. return only what survived
+
+Every candidate needs a concrete incorrect behaviour, a plausible user-facing
+scenario, evidence from CURRENT source, and a deterministic reproduction. Never
+assert library/compiler/runtime behaviour from memory — run it and quote output.
+If nothing genuine survives, return an empty candidates array; do not invent one.
+
+Reply ONLY JSON:
+{"evidence": {"sourceInspected": true, "filesInspected": ["packages/..."], "commandsExecuted": ["..."], "graphifyUsed": false, "runtimeVerified": true, "evidenceSummary": "..."},
+ "candidates": [{"title": "...", "file": "packages/...", "incorrectBehaviour": "...", "userScenario": "...", "reproduction": "exact command or spec", "reproductionOutput": "what it printed", "confidence": "high|medium|low"}]}
+
+Your evidence block is cross-checked against your actual tool executions.`;
+}
+
+function designPrompt(rec: TaskRecord, investigation?: string | null): string {
   const depth = rec.risk === 'high'
     ? `This is a HIGH accounting-impact task. Include:
 - precise invariants (each one falsifiable),
@@ -996,7 +1175,7 @@ function designPrompt(rec: TaskRecord): string {
 
 TASK ${rec.taskId} (risk=${rec.risk}):
 ${rec.description}
-
+${investigation ? `\n${investigation}\n` : ''}
 ${depth}
 
 Reply with ONLY a JSON object:
@@ -1043,8 +1222,36 @@ Rules:
 Reply ONLY JSON: {"status": "IMPLEMENTED"|"SCOPE_EXPANSION_REQUIRED"|"FAILED", "filesChanged": [], "testsAdded": [], "requestedPaths": [], "reason": ""}`;
 }
 
-function reviewPrompt(rec: TaskRecord, d: DesignRevision, diff: string): string {
+interface ReviewContext {
+  cwd: string;
+  graphify?: { out: string; graphSourceSha: string } | null;
+  eventCoupling?: string | null;
+}
+
+function reviewPrompt(rec: TaskRecord, d: DesignRevision, diff: string, ctx: ReviewContext): string {
   return `Independently review this implementation. Severities: CRITICAL (realistic financial corruption / tenant leakage / security breach / irreversible loss / fundamentally wrong result), IMPORTANT (concrete bug or meaningful weakness), SUGGESTION (style/preference — never blocks). A CRITICAL finding must include a concrete scenario; theory alone cannot block.
+
+YOU ARE RUNNING INSIDE THE TASK WORKTREE: ${ctx.cwd}
+Your sandbox is read-only but you CAN run commands. Reviewing from the diff text alone is NOT acceptable for a material finding.
+
+REQUIRED WORKFLOW — targeted, not exhaustive. Do NOT browse the whole repository:
+1. read the diff below
+2. open the changed files and the implementation immediately around them
+3. open the relevant tests/config where the change interacts with them
+4. VERIFY CHEAP FACTS INSTEAD OF GUESSING — if a check takes under ~30 seconds, run it:
+     node -e "console.log(require('some-pkg').someFn('x'))"
+     node -e "console.log(require('some-pkg/package.json').version)"
+     node_modules/.bin/tsc --noEmit -p tsconfig.json
+     node_modules/.bin/jest <spec> --silent
+   Never assert library behaviour, return values, versions, exports or compiler
+   output from memory. Run it and quote the output.
+5. only then write findings
+${ctx.graphify ? `
+GRAPHIFY BLAST-RADIUS CONTEXT (graph sourceSha ${ctx.graphify.graphSourceSha} — matches the code under review).
+NAVIGATION ONLY, never evidence: anything it suggests must be confirmed in current source before you raise it.
+${ctx.graphify.out.slice(0, 4000)}` : ''}${ctx.eventCoupling ? `
+EVENT COUPLING (deterministic index — imports alone miss these):
+${ctx.eventCoupling.slice(0, 1500)}` : ''}
 
 TASK ${rec.taskId} (risk=${rec.risk}): ${rec.title}
 DESIGN: ${JSON.stringify(d).slice(0, 6000)}
@@ -1052,7 +1259,11 @@ DESIGN: ${JSON.stringify(d).slice(0, 6000)}
 DIFF (task worktree vs base):
 ${diff}
 
-Reply ONLY JSON: {"findings": [{"findingId": "R-1", "severity": "...", "category": "...", "claim": "...", "file": "...", "scenario": "...", "confidence": "..."}]}`;
+Reply ONLY JSON:
+{"evidence": {"sourceInspected": true, "filesInspected": ["packages/..."], "commandsExecuted": ["..."], "graphifyUsed": false, "runtimeVerified": false, "evidenceSummary": "one line"},
+ "findings": [{"findingId": "R-1", "severity": "...", "category": "...", "claim": "...", "file": "...", "scenario": "...", "confidence": "...", "verifiedBy": "what you actually ran or read"}]}
+
+Your evidence block is cross-checked against your real tool executions. Claiming a tool you did not run is recorded as TOOL_CLAIM_MISMATCH, and an IMPORTANT/CRITICAL source claim with no inspection and no executed verification is downgraded to UNVERIFIED and cannot block on its own.`;
 }
 
 function fixPrompt(rec: TaskRecord, d: DesignRevision, fixes: Finding[], reason: string): string {

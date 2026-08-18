@@ -24,6 +24,7 @@ import {
   ROLES, REASONING, PRESETS, getModelSettings, setRoleSetting, applyPreset, refreshAvailability, isRefreshing,
 } from './core/models';
 import { TaskRecord } from './core/types';
+import * as graphify from './core/graphify';
 
 const HOST = process.env.AI_BIND_HOST ?? '172.17.0.1';
 const PORT = Number(process.env.AI_V2_PORT ?? 8788);
@@ -113,7 +114,9 @@ function projectTask(taskId: string) {
   const findings = allFindings(events, taskId);
   const tests = evs.filter((e) => e.type === 'TEST_RESULT').map((e) => ({ ...(e.payload as any), ts: e.ts }));
   const checksEv = evs.filter((e) => e.type === 'DETERMINISTIC_CHECK').map((e) => ({ ...(e.payload as any), ts: e.ts }));
-  const evidence = evs.filter((e) => e.type === 'EVIDENCE').map((e) => e.payload as any);
+  // Keep agent/phase on evidence so the UI can attribute it to the right pane.
+  const evidence = evs.filter((e) => e.type === 'EVIDENCE')
+    .map((e) => ({ ...(e.payload as any), _agent: e.agent ?? null, _phase: e.phase ?? null, _ts: e.ts }));
   const agents = evs.filter((e) => ['AGENT_STARTED', 'AGENT_FINISHED', 'AGENT_FAILED'].includes(e.type))
     .map((e) => ({ type: e.type, agent: e.agent, phase: e.phase, ts: e.ts, ...(e.payload as any) }));
   const merge = evs.filter((e) => e.type === 'MERGE_RESULT').map((e) => e.payload as any).pop() ?? null;
@@ -126,7 +129,7 @@ function projectTask(taskId: string) {
   const modelPolicy = evs.filter((e) => e.type === 'TASK_MODEL_POLICY').map((e) => e.payload as any).pop() ?? null;
   return {
     ...rec, design, designRevisions, findings, tests, checks: checksEv, agents, merge, deploy,
-    modelPolicy,
+    modelPolicy, evidence,
     verified, notVerified,
     eventCount: evs.length,
     history: evs.map((e) => ({ seq: e.seq, ts: e.ts, type: e.type, agent: e.agent, phase: e.phase,
@@ -457,6 +460,46 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
     }
     return json(res, 404, { error: 'not found' });
+  }
+
+  // ---- Graphify status (read-only; no shell, no arbitrary queries) -------
+  if (p === '/api/v2/graphify' && req.method === 'GET') {
+    const st = graphify.status();
+    let originMain = '';
+    try {
+      originMain = require('child_process')
+        .execFileSync('git', ['-C', process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo', 'rev-parse', 'origin/main'],
+          { encoding: 'utf8', timeout: 20_000 }).trim();
+    } catch { /* reported as unknown below */ }
+    const use = originMain ? graphify.graphFor(originMain) : null;
+    return json(res, 200, {
+      ...st,
+      originMain,
+      graphCurrent: !!use?.usable,
+      graphState: use?.usable ? 'CURRENT' : (use ? use.reason : 'UNKNOWN'),
+      building: graphify.isBuilding(),
+    });
+  }
+  if (p === '/api/v2/graphify/rebuild' && req.method === 'POST') {
+    // Narrow, fixed operation: rebuild the graph for CURRENT origin/main.
+    // The browser supplies nothing — no path, no flags, no query string.
+    if (rateGate('deploy', ip)) return json(res, 429, { error: 'rate limited' });
+    if (req.headers['x-csrf-token'] !== sess.csrf) return json(res, 403, { error: 'csrf token mismatch' });
+    if (graphify.isBuilding()) return json(res, 202, { ok: true, running: graphify.isBuilding() });
+    const repo = process.env.AI_V2_REPO ?? '/srv/ai-accounting/repo';
+    let sha = '';
+    try {
+      sha = require('child_process').execFileSync('git', ['-C', repo, 'rev-parse', 'origin/main'],
+        { encoding: 'utf8', timeout: 20_000 }).trim();
+    } catch { return json(res, 500, { error: 'cannot resolve origin/main' }); }
+    graphify.buildGraph(sha, repo, (dir, atSha) => {
+      require('child_process').execFileSync('git', ['-C', repo, 'worktree', 'add', '--detach', dir, atSha],
+        { encoding: 'utf8', timeout: 600_000 });
+    }).then((r) => {
+      events.append({ taskId: 'SYSTEM-SETTINGS', type: 'NOTE', payload: {
+        graphifyRebuild: { requestedBy: sess.user, sha, ok: r.ok, detail: r.detail, meta: r.meta ?? null } } });
+    }).catch(() => undefined);
+    return json(res, 202, { ok: true, started: true, sha });
   }
 
   // ---- AI model settings (role-based; closed-world validation) -----------

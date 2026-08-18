@@ -1,24 +1,3 @@
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/mjrafg/.local/bin/graphify hook-guard search"
-          }
-        ]
-      },
-      {
-        "matcher": "Read|Glob",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/mjrafg/.local/bin/graphify hook-guard read --strict"
-          }
-        ]
-      }
-    ]
-  }
+  "_comment": "Graphify PreToolUse hooks were removed on 2026-08-18. They referenced a macOS-only binary path that does not exist on this Linux server, so they failed open on every Bash/Grep/Read/Glob call and provided no guard. Autopilot V2 now invokes graphify explicitly against a SHA-pinned graph instead of via hooks."
 }

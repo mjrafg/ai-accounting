@@ -21,6 +21,7 @@ import { StreamLog, writeRawArtifact } from './store';
 import { parseStructured, looksRateLimited, FailureKind } from './parsers';
 import { AgentRunResult } from './types';
 import { RunHandle, registerRun, unregisterRun, signalGroup } from './procs';
+import { extractToolEvidence, ToolEvidence } from './toolevidence';
 
 export const BILLING_MODE = 'SUBSCRIPTION_CLI_ONLY';
 const BANNED_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
@@ -361,6 +362,7 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
             : killed ? `agent timed out after ${Math.round(spec.timeoutMs / 1000)}s`
               : effective.error ?? `agent exited ${code}`,
         attempts: 1,
+        toolEvidence: extractToolEvidence(rawLines),
         usage: null,
         firstChunkMs: st.firstChunkAt ? st.firstChunkAt - started : undefined,
         requestedModel: spec.agent === 'codex' ? (spec.model ?? 'codex-default') : (spec.model ?? CLAUDE_MODEL),

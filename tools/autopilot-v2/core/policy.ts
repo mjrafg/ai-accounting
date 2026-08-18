@@ -70,6 +70,10 @@ export function budgetFor(risk: Risk): ReviewBudget {
 export function materialFindings(findings: Finding[]): Finding[] {
   return findings.filter((f) =>
     (f.severity === 'CRITICAL' || f.severity === 'IMPORTANT') &&
+    // An UNVERIFIED claim (no source inspected, nothing executed) is recorded
+    // and adjudicated, but it is not material on its own — this is what stops
+    // a confident-but-unchecked reviewer assertion from blocking a merge.
+    !f.unverified &&
     !['REJECT', 'DEFER', 'DETERMINISTICALLY_REJECTED'].includes(f.status));
 }
 export function unresolvedCritical(findings: Finding[]): Finding[] {

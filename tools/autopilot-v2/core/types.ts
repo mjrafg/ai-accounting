@@ -96,6 +96,11 @@ export interface Finding {
   status: FindingStatus;
   decisionSource?: 'agent' | 'deterministic' | 'human' | 'policy';
   evidence?: string;
+  /** Raised without source inspection or an executed check: cannot block alone. */
+  unverified?: boolean;
+  unverifiedReason?: string;
+  /** What the reviewer says it actually ran or read for this finding. */
+  verifiedBy?: string;
 }
 
 /**
@@ -176,6 +181,12 @@ export interface AgentRunResult {
   provider?: string;
   /** The run was cancelled; its output must not mutate task state. */
   cancelled?: boolean;
+  /** What the agent ACTUALLY executed, parsed from its raw transcript. */
+  toolEvidence?: {
+    sourceInspected: boolean; filesInspected: string[]; commandsExecuted: string[];
+    graphifyUsed: boolean; graphSourceSha: string | null; runtimeVerified: boolean;
+    toolCallCount: number; claimMismatch: string[];
+  };
 }
 
 export interface CheckResult {

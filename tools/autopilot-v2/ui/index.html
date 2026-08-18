@@ -109,7 +109,7 @@ const $ = (t, attrs = {}, kids = []) => {
 };
 const freshRep = () => ({ current:null, history:[], busy:false, msg:"", auto:false, timer:null, delta:null, loaded:false });
 const state = { csrf:null, view:"home", taskId:null, tab:"live", tasks:[], legacy:[], sys:null, obs:null, detail:null, dep:null,
-  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false}, rep: freshRep(), modelMeta:null };
+  es:null, lastId:0, autoscroll:true, filter:"all", search:"", mfa:{enrolled:false}, rep: freshRep(), modelMeta:null, gfy:null };
 
 async function api(path, opts = {}) {
   const o = { headers: { "content-type": "application/json" }, ...opts };
@@ -524,6 +524,24 @@ function tabLive(t) {
       ri && ri.reasoningEffort ? $("span", { class: "m", style: "color:var(--muted);font-weight:400", text: "Reasoning: " + ri.reasoningEffort }) : null,
       ri && ri.live ? $("span", { class: "pill s-run", text: "● LIVE" }) : null,
     ]));
+    // Review evidence — rendered ONLY from machine-recorded values.
+    // Attribute evidence to the agent that produced it — never show one
+    // agent's inspection record under another agent's pane.
+    const evd = (t.evidence || []).filter(e => e.reviewEvidence && e._agent === a).pop();
+    if (evd && ri) {
+      const re = evd.reviewEvidence;
+      const tick = (on, label, note) => $("span", { class: "m", style: "font-size:11.5px;color:var(--muted);margin-right:12px",
+        text: `${label} ${on ? "✓" : "—"}${note ? " " + note : ""}` });
+      const row = $("div", { style: "padding:6px 12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap" }, [
+        tick(re.sourceInspected, "Source inspected", re.sourceInspected ? `(${(re.filesInspected||[]).length} files)` : ""),
+        tick(re.graphifyUsed, "Graphify", re.graphifyUsed && re.graphSourceSha ? `(${String(re.graphSourceSha).slice(0,9)})` : ""),
+        tick(re.runtimeVerified, "Runtime verified", ""),
+        tick(re.toolCallCount > 0, "Tool calls", `(${re.toolCallCount})`),
+      ]);
+      (re.claimMismatch || []).forEach(mm => row.appendChild(
+        $("span", { class: "pill s-bad", style: "font-size:11px", text: "TOOL_CLAIM_MISMATCH" })));
+      pane.appendChild(row);
+    }
     const log = $("div", { class: "alog", id: "alog-" + a });
     for (const ch of (paneBufs[a] || [])) if (matchesSearch(ch)) log.appendChild(chunkLine(ch));
     pane.appendChild(log);
@@ -949,6 +967,7 @@ function viewSystem() {
   } else dep.appendChild($("div",{class:"empty",text:"Loading…"}));
   m.appendChild(dep);
 
+  m.appendChild(graphifyCard());
   m.appendChild(aiModelsCard());
 
   const mfa = $("div",{class:"card"},[$("h2",{text:"MFA"})]);
@@ -971,6 +990,48 @@ function viewSystem() {
   }
   m.appendChild(mfa);
   return m;
+}
+
+// ---- GRAPHIFY (System) ----------------------------------------------------
+function graphifyCard() {
+  const c = $("div", { class: "card" }, [$("h2", { text: "Graphify" })]);
+  const g = state.gfy;
+  if (!g) { c.appendChild($("div", { class: "empty", text: "status unavailable" })); return c; }
+  const stateLabel = !g.installed ? "Unavailable"
+    : g.building ? "Building…"
+    : g.graphCurrent ? "Ready" : (g.graphState === "GRAPH_STALE" ? "Stale" : "No graph");
+  const cls = !g.installed ? "s-bad" : g.graphCurrent ? "s-ok" : "s-warn";
+  c.appendChild($("div", { class: "row" }, [
+    $("span", { style: "font-weight:700", text: "Status" }),
+    $("span", { class: "pill " + cls, text: stateLabel }),
+    g.version ? $("span", { class: "m", style: "color:var(--muted);font-size:12.5px", text: g.version }) : null,
+  ]));
+  const latest = g.latest;
+  c.appendChild($("dl", { class: "kv", style: "margin-top:8px" }, [
+    $("dt", { text: "Graph SHA" }), $("dd", { class: "mono", text: latest ? latest.sourceSha : "—" }),
+    $("dt", { text: "origin/main" }), $("dd", { class: "mono", text: g.originMain || "—" }),
+    $("dt", { text: "Graph" }), $("dd", { text: g.graphCurrent ? "Current (matches origin/main)"
+      : g.graphState === "GRAPH_STALE" ? "STALE — not used for review until rebuilt" : String(g.graphState || "—") }),
+    $("dt", { text: "Size" }), $("dd", { text: latest ? `${latest.nodeCount} nodes · ${latest.edgeCount} edges · ${latest.fileCount} files` : "—" }),
+    $("dt", { text: "Generated" }), $("dd", { text: latest ? fmt(latest.generatedAt) : "—" }),
+    $("dt", { text: "Cached graphs" }), $("dd", { text: String((g.graphs || []).length) }),
+  ]));
+  c.appendChild($("p", { class: "sub", text: "Graphify supplies navigation and blast-radius context only. It never outranks current source, deterministic tests, or runtime evidence, and a graph whose SHA does not match the analyzed code is never used." }));
+  const btn = $("button", { class: "btn sec", text: g.building ? "Rebuilding…" : "Rebuild graph for origin/main" });
+  btn.disabled = !g.installed || !!g.building;
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Rebuilding…";
+    try {
+      await api("/api/v2/graphify/rebuild", { method: "POST", body: "{}" });
+      const poll = setInterval(async () => {
+        try { state.gfy = await api("/api/v2/graphify"); } catch {}
+        if (state.gfy && !state.gfy.building) { clearInterval(poll); render(); }
+      }, 10000);
+      setTimeout(() => clearInterval(poll), 30 * 60000);
+    } catch (e) { alert(e.message); btn.disabled = false; }
+  };
+  c.appendChild(btn);
+  return c;
 }
 
 // ---- AI MODELS (System) ---------------------------------------------------
@@ -1139,7 +1200,14 @@ async function refresh() {
   } catch { /* transient */ }
 }
 async function loadObs() { try { state.obs = await api("/api/v2/observatory"); render(); } catch {} }
-async function loadSys() { try { state.sys = await api("/api/v2/system"); state.dep = await api("/api/v2/settings/deployment"); await loadModelMeta(); render(); } catch {} }
+async function loadSys() {
+  try {
+    state.sys = await api("/api/v2/system");
+    state.dep = await api("/api/v2/settings/deployment");
+    try { state.gfy = await api("/api/v2/graphify"); } catch { state.gfy = null; }
+    await loadModelMeta(); render();
+  } catch {}
+}
 
 async function boot() {
   const s = await api("/api/v2/session");

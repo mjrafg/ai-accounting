@@ -11,6 +11,8 @@
  */
 import { execFile, execFileSync, spawn, spawnSync } from 'child_process';
 import { RunHandle, registerRun, unregisterRun, signalGroup } from './procs';
+import { eventCoupling } from './eventindex';
+import * as graphify from './graphify';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -469,7 +471,7 @@ export async function decideTestToDecide(worktree: string, findingId: string, ch
  * event-mediated coupling (emitters ↔ subscribers share event-name constants).
  * Expansion only — impact analysis never removes an obvious module test.
  */
-export function affectedSpecs(worktree: string, changedFiles: string[]): { specs: string[]; rationale: string[] } {
+export function affectedSpecs(worktree: string, changedFiles: string[], graphSha?: string): { specs: string[]; rationale: string[] } {
   const specs = new Set<string>();
   const rationale: string[] = [];
   const serverRel = 'packages/server/';
@@ -492,16 +494,51 @@ export function affectedSpecs(worktree: string, changedFiles: string[]): { specs
       const rel = path.relative(worktree, hit);
       if (!specs.has(rel)) { specs.add(rel); rationale.push(`${rel}: imports/mentions ${base}`); }
     }
-    // 3. event-mediated coupling
-    const content = fs.existsSync(path.join(worktree, f)) ? fs.readFileSync(path.join(worktree, f), 'utf8') : '';
-    for (const ev of content.match(/events\.[A-Za-z]+\.[A-Za-z.]+/g) ?? []) {
-      const g2 = spawnSync('grep', ['-rl', '--include=*.spec.ts', ev, path.join(worktree, 'packages/server/src')],
-        { encoding: 'utf8', timeout: 30_000 });
-      for (const hit of (g2.stdout ?? '').split('\n').filter(Boolean)) {
-        const rel = path.relative(worktree, hit);
-        if (!specs.has(rel)) { specs.add(rel); rationale.push(`${rel}: coupled via event ${ev}`); }
-      }
+  }
+
+  // 3. Event-mediated coupling, via the deterministic index.
+  //
+  // The previous version grepped only *.spec.ts for event names; no spec in
+  // this codebase references an event, so it never selected anything. The
+  // index walks emitter → event → subscriber → that subscriber's specs, plus
+  // queue/worker relationships.
+  try {
+    const ec = eventCoupling(worktree, changedFiles);
+    for (const s of ec.specs) if (!specs.has(s)) { specs.add(s); rationale.push(`${s}: event-coupled`); }
+    for (const r of ec.rationale.slice(0, 20)) rationale.push(`event-index: ${r}`);
+  } catch { /* additive only */ }
+
+  // 4. Graphify reverse dependencies (blast radius) — ADDITIVE, and only when
+  // a graph exists for exactly this source SHA. It may add specs; it can never
+  // remove one selected above.
+  if (graphSha) {
+    try {
+      const g = graphifyAffectedSync(graphSha, srcFiles);
+      for (const s of g.specs) if (!specs.has(s)) { specs.add(s); rationale.push(`${s}: graphify blast radius (graph ${graphSha.slice(0, 9)})`); }
+      if (g.note) rationale.push(`graphify: ${g.note}`);
+    } catch { /* additive only */ }
+  }
+
+  return { specs: [...specs].slice(0, 60), rationale: rationale.slice(0, 100) };
+}
+
+/**
+ * Graphify-suggested specs for the changed files. Synchronous by design so it
+ * can sit inside the existing impact-analysis call; bounded to a couple of
+ * lookups so review latency stays flat.
+ */
+function graphifyAffectedSync(graphSha: string, srcFiles: string[]): { specs: string[]; note: string } {
+  const use = graphify.graphFor(graphSha);
+  if (!use.usable) return { specs: [], note: `${use.reason}: ${use.detail}` };
+  const specs = new Set<string>();
+  for (const f of srcFiles.slice(0, 3)) {
+    const r = spawnSync(process.env.AI_GRAPHIFY_BIN ?? '/home/aiaccounting/.venvs/graphify/bin/graphify',
+      ['affected', path.basename(f), '--graph', use.graph, '--depth', '2'],
+      { encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+    if (r.status !== 0) continue;
+    for (const cand of graphify.filesFromAffected(r.stdout ?? '')) {
+      if (cand.endsWith('.spec.ts')) specs.add(cand);
     }
   }
-  return { specs: [...specs].slice(0, 60), rationale: rationale.slice(0, 100) };
+  return { specs: [...specs], note: `graph ${use.sha.slice(0, 9)} consulted` };
 }

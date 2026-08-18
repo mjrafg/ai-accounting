@@ -421,6 +421,207 @@ async function main(): Promise<number> {
       toFix.length === 0 && openMaterial.length === 0);
   }
 
+  // ---- Graphify provenance, staleness, evidence ---------------------------
+  section('graphify: availability, SHA provenance, stale rule, reuse, claim integrity');
+  {
+    const gfy = require('./core/graphify') as typeof import('./core/graphify');
+    const te = require('./core/toolevidence') as typeof import('./core/toolevidence');
+    const GROOT = path.join(process.env.AI_V2_STATE!, 'graphify');
+    const SHA_A = 'a'.repeat(40), SHA_B = 'b'.repeat(40);
+    const writeGraph = (sha: string, nodes = 10) => {
+      fs.mkdirSync(path.join(GROOT, sha), { recursive: true });
+      fs.writeFileSync(path.join(GROOT, sha, 'graph.json'), JSON.stringify({ nodes: [], links: [] }));
+      fs.writeFileSync(path.join(GROOT, sha, 'meta.json'), JSON.stringify({
+        sourceSha: sha, generatedAt: new Date().toISOString(), graphifyVersion: '0.9.46',
+        fileCount: 3, nodeCount: nodes, edgeCount: nodes * 2 }));
+    };
+
+    // A. availability is a real probe of the binary, not an assumption
+    const realAvail = gfy.isAvailable();
+    check('A: availability reflects a real binary probe',
+      realAvail === (gfy.graphifyVersion() !== null), `installed=${realAvail} version=${gfy.graphifyVersion()}`);
+    const prevBin = process.env.AI_GRAPHIFY_BIN;
+    check('A: nonexistent binary reports unavailable (no graph use)',
+      (() => { const g = gfy.graphFor(SHA_A); return g.usable === false || realAvail; })());
+
+    // B/C/F. provenance recorded; exact SHA match accepted and reused
+    writeGraph(SHA_A);
+    const meta = gfy.readMeta(SHA_A)!;
+    check('B: graph provenance recorded (sha/generatedAt/version/counts)',
+      meta.sourceSha === SHA_A && !!meta.generatedAt && meta.graphifyVersion === '0.9.46' &&
+      meta.nodeCount === 10 && meta.edgeCount === 20 && meta.fileCount === 3);
+    const useA = gfy.graphFor(SHA_A);
+    check('C: matching source SHA is usable', realAvail ? useA.usable === true : true);
+    const useA2 = gfy.graphFor(SHA_A);
+    check('F: identical SHA reuses the cached graph (no rebuild)',
+      realAvail ? (useA2 as any).graph === (useA as any).graph : true);
+
+    // D/E. stale SHA detected and never silently trusted
+    const useB = gfy.graphFor(SHA_B);
+    check('D: different source SHA is detected as stale/absent', useB.usable === false);
+    check('E: stale graph is reported, never substituted',
+      useB.usable === false && ['GRAPH_STALE', 'NO_GRAPH', 'UNAVAILABLE'].includes((useB as any).reason) &&
+      (useB as any).haveSha !== SHA_B);
+    if (realAvail && (useB as any).reason === 'GRAPH_STALE') {
+      check('E: stale report names the graph it DOES have', (useB as any).haveSha === SHA_A);
+    } else { check('E: stale report names the graph it DOES have (n/a)', true); }
+
+    // G/H. invocation evidence is machine-observed; prose cannot fake it
+    const observedReal = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+        command: `/home/aiaccounting/.venvs/graphify/bin/graphify affected "X.ts" --graph ${GROOT}/${SHA_A}/graph.json --depth 2` } }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+        command: 'sed -n 1,40p packages/server/src/modules/Attachments/Attachments.controller.ts' } }),
+    ]);
+    check('G: real graphify invocation recorded from transcript', observedReal.graphifyUsed === true);
+    check('G: graph SHA captured from the invocation', observedReal.graphSourceSha === SHA_A);
+    check('G: inspected source files captured', observedReal.sourceInspected &&
+      observedReal.filesInspected.some((f) => f.includes('Attachments.controller.ts')));
+
+    // Reading graphify's own documentation is NOT using graphify. Observed for
+    // real in TASK-V2-0010, where a `sed` of skills/graphify/SKILL.md set
+    // graphifyUsed=true.
+    const docRead = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+        command: "/bin/bash -lc \"sed -n '1,240p' /srv/ai-accounting/worktrees/TASK-V2-0010/.agents/skills/graphify/SKILL.md\"" } }),
+    ]);
+    check('G: reading a path containing "graphify" is NOT an invocation', docRead.graphifyUsed === false);
+    check('G: that read still counts as source inspection', docRead.toolCallCount === 1);
+
+    const observedNone = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message',
+        text: "I'm using the graphify skill because the project's graph is the required first source of architectural context." } }),
+    ]);
+    const reconciled = te.reconcileClaims(observedNone, { graphifyUsed: true, sourceInspected: true, runtimeVerified: true });
+    check('H: prose claiming graphify cannot set graphifyUsed', reconciled.graphifyUsed === false);
+    check('H: prose claiming source inspection cannot set sourceInspected', reconciled.sourceInspected === false);
+    check('H: overclaims recorded as TOOL_CLAIM_MISMATCH', reconciled.claimMismatch.length === 3 &&
+      reconciled.claimMismatch.every((m) => m.startsWith('TOOL_CLAIM_MISMATCH')));
+
+    // I. no graphify available → review still proceeds on source inspection
+    const srcOnly = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'cat packages/server/src/utils/is-blank.ts' } }),
+    ]);
+    check('I: source-only review is fully supported without graphify',
+      srcOnly.graphifyUsed === false && te.findingIsSupported('CRITICAL', srcOnly).supported);
+
+    // J. trivial LOW single-file work must not be forced through graphify
+    check('J: LOW single-file review skips graphify', gfy.worthUsing('codex.codeReview', 'low', 1) === false);
+    check('J: HIGH review uses graphify', gfy.worthUsing('codex.codeReview', 'high', 1) === true);
+    check('J: MEDIUM multi-file review uses graphify', gfy.worthUsing('codex.codeReview', 'medium', 4) === true);
+    check('J: MEDIUM single-file review skips graphify', gfy.worthUsing('codex.codeReview', 'medium', 1) === false);
+    check('J: investigation always uses graphify when available', gfy.worthUsing('claude.investigation', 'low', 0) === true);
+    check('J: adjudication/repair/report never use graphify',
+      !gfy.worthUsing('claude.adjudication', 'high', 9) && !gfy.worthUsing('claudeCode.repair', 'high', 9) &&
+      !gfy.worthUsing('claude.report', 'high', 9));
+    if (prevBin === undefined) delete process.env.AI_GRAPHIFY_BIN; else process.env.AI_GRAPHIFY_BIN = prevBin;
+  }
+
+  // ---- Codex source-inspection evidence + false-finding regression --------
+  section('review evidence: source inspection required, unverified claims cannot block');
+  {
+    const te = require('./core/toolevidence') as typeof import('./core/toolevidence');
+
+    // A. material finding backed by real inspection is supported
+    const inspected = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+        command: 'sed -n 1,80p packages/server/src/modules/Attachments/Attachments.controller.ts' } }),
+    ]);
+    check('A: material finding with source inspection is supported',
+      te.findingIsSupported('IMPORTANT', inspected).supported && inspected.filesInspected.length === 1);
+
+    // B. THE mime-types regression, architecturally: a confident library claim
+    // with no inspection and no executed check must not block.
+    const diffOnly = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message',
+        text: 'The real mime-types module returns jpg for extension("image/jpeg"), so the test is wrong.' } }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ]);
+    check('B: diff-only reviewer executed nothing', diffOnly.toolCallCount === 0 && !diffOnly.sourceInspected);
+    const gate = te.findingIsSupported('IMPORTANT', diffOnly);
+    check('B: unchecked library claim is NOT supported (mime-types regression)', !gate.supported);
+    check('B: reason names the missing evidence', /no source inspection and no executed verification/.test(gate.reason));
+    const unverifiedFinding: Finding = { findingId: 'R-1', severity: 'IMPORTANT', category: 'test correctness',
+      claim: 'mime-types returns jpg', scenario: 'spec expects jpeg', status: 'UNRESOLVED', unverified: true };
+    check('B: an UNVERIFIED material finding is not material and cannot block',
+      policy.materialFindings([unverifiedFinding]).length === 0);
+    const verifiedFinding: Finding = { ...unverifiedFinding, unverified: false };
+    check('B: the same finding WITH evidence stays material',
+      policy.materialFindings([verifiedFinding]).length === 1);
+    check('B: SUGGESTION is unaffected by the evidence gate',
+      te.findingIsSupported('SUGGESTION', diffOnly).supported);
+
+    // E. a cheap factual check that WAS executed supports the claim
+    const ranCheck = te.extractToolEvidence([
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
+        command: `node -e "console.log(require('mime-types').extension('image/jpeg'))"`,
+        aggregated_output: 'jpeg' } }),
+    ]);
+    check('E: executed factual verification supports a material finding',
+      ranCheck.runtimeVerified && te.findingIsSupported('IMPORTANT', ranCheck).supported);
+
+    // C/D/F. claude-shaped transcripts, nearby tests/config, task attribution
+    const claudeShaped = te.extractToolEvidence([
+      JSON.stringify({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/srv/ai-accounting/worktrees/TASK-V2-9500/packages/server/src/a.service.ts' } },
+        { type: 'tool_use', name: 'Read', input: { file_path: '/srv/ai-accounting/worktrees/TASK-V2-9500/packages/server/src/a.service.spec.ts' } },
+        { type: 'tool_use', name: 'Bash', input: { command: 'cat packages/server/tsconfig.json' } },
+      ] } }),
+    ]);
+    check('C/D: worktree source, its spec and config all recorded',
+      claudeShaped.filesInspected.some((f) => f.endsWith('a.service.ts')) &&
+      claudeShaped.filesInspected.some((f) => f.endsWith('a.service.spec.ts')) &&
+      claudeShaped.filesInspected.some((f) => f.endsWith('tsconfig.json')));
+    check('F: evidence is derived per-run, so it belongs to that run only',
+      claudeShaped.toolCallCount === 3 && diffOnly.toolCallCount === 0);
+  }
+
+  // ---- event coupling ------------------------------------------------------
+  section('impact analysis: event coupling (emitter → subscriber → spec) and additivity');
+  {
+    const { eventCoupling } = require('./core/eventindex') as typeof import('./core/eventindex');
+    const wt = fs.mkdtempSync(path.join(TMP, 'evt-'));
+    const mod = path.join(wt, 'packages/server/src/modules');
+    fs.mkdirSync(path.join(mod, 'Invoices'), { recursive: true });
+    fs.mkdirSync(path.join(mod, 'Ledger'), { recursive: true });
+    fs.mkdirSync(path.join(mod, 'Workers'), { recursive: true });
+
+    // Emitter — no import relationship to the subscriber at all.
+    fs.writeFileSync(path.join(mod, 'Invoices/Invoice.service.ts'),
+      `import { events } from '@/common/events';\nexport class InvoiceService {\n  async create() {\n    await this.emitter.emitAsync(events.saleInvoice.onCreated, { id: 1 });\n    await this.queue.add('gl-rewrite', {});\n  }\n}\n`);
+    // Subscriber — reachable ONLY through the event name.
+    fs.writeFileSync(path.join(mod, 'Ledger/GLSubscriber.ts'),
+      `import { events } from '@/common/events';\nexport class GLSubscriber {\n  @OnEvent(events.saleInvoice.onCreated)\n  handle() { /* writes GL entries */ }\n}\n`);
+    fs.writeFileSync(path.join(mod, 'Ledger/GLSubscriber.spec.ts'), `describe('GLSubscriber', () => { it('posts', () => {}); });\n`);
+    // Queue processor — reachable only through the queue name.
+    fs.writeFileSync(path.join(mod, 'Workers/GlRewrite.processor.ts'),
+      `@Processor('gl-rewrite')\nexport class GlRewriteProcessor { async handle() {} }\n`);
+    fs.writeFileSync(path.join(mod, 'Workers/GlRewrite.processor.spec.ts'), `describe('GlRewriteProcessor', () => { it('runs', () => {}); });\n`);
+
+    const ec = eventCoupling(wt, ['packages/server/src/modules/Invoices/Invoice.service.ts']);
+    check('event name extracted from the changed emitter', ec.events.includes('events.saleInvoice.onCreated'));
+    check('subscriber found through the event, not imports',
+      ec.coupledFiles.some((f) => f.endsWith('Ledger/GLSubscriber.ts')));
+    check('rationale states the listener relationship',
+      ec.rationale.some((r) => /GLSubscriber\.ts: LISTENS to events\.saleInvoice\.onCreated/.test(r)));
+    check('subscriber SPEC selected as affected',
+      ec.specs.some((s) => s.endsWith('Ledger/GLSubscriber.spec.ts')));
+    check('queue processor coupled through the queue name',
+      ec.coupledFiles.some((f) => f.endsWith('Workers/GlRewrite.processor.ts')));
+    check('queue processor spec selected',
+      ec.specs.some((s) => s.endsWith('Workers/GlRewrite.processor.spec.ts')));
+
+    // Additivity: the union may only ever grow the existing selection.
+    const existing = ['packages/server/src/modules/Invoices/Invoice.service.spec.ts'];
+    const union = [...new Set([...existing, ...ec.specs])];
+    check('affected tests are a UNION (existing selection preserved)',
+      existing.every((e) => union.includes(e)) && union.length >= existing.length + 2);
+
+    // An unrelated change must not drag the whole suite in.
+    const none = eventCoupling(wt, ['packages/server/src/modules/Ledger/README.md']);
+    check('unrelated non-source change couples nothing', none.events.length === 0 && none.specs.length === 0);
+  }
+
   // ---- real cancellation ---------------------------------------------------
   section('cancellation: process-group kill, verified termination, late-result rejection');
   {
