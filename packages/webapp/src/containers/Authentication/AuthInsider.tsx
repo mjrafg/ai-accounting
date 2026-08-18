@@ -4,11 +4,15 @@
  * `AuthInsider` is a layout component, not a routed page: it wraps whatever a
  * page renders in `AuthInsiderContent` and appends the optional
  * `AuthCopyright` footer. It is consumed by `Login`, `RegisterUserForm`,
- * `ResetPassword`, `SendResetPassword`, `InviteAccept` and `RegisterVerify`,
- * all of which are mounted by `@/routes/authentication` inside the
- * `Authentication.tsx` shell — the shell contributes the page background,
+ * `ResetPassword`, `SendResetPassword`, `InviteAccept` and `RegisterVerify`.
+ * The first five are mounted by `@/routes/authentication` inside the
+ * `Authentication.tsx` shell — that shell contributes the page background,
  * logo, `AuthMetaBootProvider` and route transitions, so this component only
- * owns the inner column and copyright.
+ * owns the inner column and copyright. `RegisterVerify` is the exception: it
+ * is mounted directly by `App.tsx` at `/auth/register/verify` (ahead of the
+ * general `/auth` route) behind the authenticated guards and `AuthContainer`,
+ * so it renders this frame without the shell's logo, `AuthMetaBootProvider`
+ * or route transitions.
  *
  * Note: `Authentication.tsx` also declares an unrelated local styled `div`
  * named `AuthInsider`; the two are distinct.
