@@ -532,12 +532,31 @@ function tabLive(t) {
       const re = evd.reviewEvidence;
       const tick = (on, label, note) => $("span", { class: "m", style: "font-size:11.5px;color:var(--muted);margin-right:12px",
         text: `${label} ${on ? "✓" : "—"}${note ? " " + note : ""}` });
+      const shaCurrent = !!re.graphifyUsed && !!re.graphCurrent &&
+        (!re.analyzedSourceSha || re.graphSourceSha === re.analyzedSourceSha);
       const row = $("div", { style: "padding:6px 12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap" }, [
         tick(re.sourceInspected, "Source inspected", re.sourceInspected ? `(${(re.filesInspected||[]).length} files)` : ""),
-        tick(re.graphifyUsed, "Graphify", re.graphifyUsed && re.graphSourceSha ? `(${String(re.graphSourceSha).slice(0,9)})` : ""),
+        tick(re.graphifyUsed, "Graphify", re.graphifyUsed ? `(${re.graphifyOperations||0} ops)` : ""),
+        tick(shaCurrent, "Graph SHA current", re.graphSourceSha ? `(${String(re.graphSourceSha).slice(0,9)})` : ""),
         tick(re.runtimeVerified, "Runtime verified", ""),
         tick(re.toolCallCount > 0, "Tool calls", `(${re.toolCallCount})`),
       ]);
+      // Expandable detail — only ever rendered from machine-recorded values.
+      if (re.graphifyUsed) {
+        const det = $("details", { style: "padding:0 12px 6px;font-size:11.5px;color:var(--muted)" });
+        det.appendChild($("summary", { style: "cursor:pointer", text: "Graphify evidence" }));
+        const dl = $("dl", { class: "kv", style: "margin-top:4px" }, [
+          $("dt", { text: "Version" }), $("dd", { text: re.graphifyVersion || "—" }),
+          $("dt", { text: "Graph SHA" }), $("dd", { class: "mono", text: re.graphSourceSha || "—" }),
+          $("dt", { text: "Analyzed SHA" }), $("dd", { class: "mono", text: re.analyzedSourceSha || "—" }),
+          $("dt", { text: "Operations" }), $("dd", { text: String(re.graphifyOperations || 0) +
+            (re.graphifyFailures ? ` (${re.graphifyFailures} failed)` : "") }),
+        ]);
+        det.appendChild(dl);
+        (re.graphifyQueries || []).forEach(q => det.appendChild(
+          $("div", { class: "mono", style: "font-size:11px;margin-left:4px", text: "· " + q })));
+        pane.appendChild(det);
+      }
       (re.claimMismatch || []).forEach(mm => row.appendChild(
         $("span", { class: "pill s-bad", style: "font-size:11px", text: "TOOL_CLAIM_MISMATCH" })));
       pane.appendChild(row);

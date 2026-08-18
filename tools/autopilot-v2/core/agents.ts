@@ -73,6 +73,23 @@ export function codexCliVersion(): string {
 
 export type AgentName = 'claude' | 'codex' | 'claude-code';
 
+/**
+ * Environment for an agent process.
+ *
+ * Two additions over the plain subscription env, both required for Graphify to
+ * be reachable at all: the directory holding `graphify-task` is prepended to
+ * PATH (the wrapper was previously invisible, so agents' `command -v graphify`
+ * probes reported it missing), and the task id is exported so the wrapper can
+ * resolve the approved graph even when the agent changes directory.
+ */
+function agentEnv(spec: AgentSpec): NodeJS.ProcessEnv {
+  const env = subscriptionEnv();
+  const binDir = process.env.AI_AGENT_BIN_DIR ?? '/srv/ai-accounting/bin';
+  env.PATH = `${binDir}:${env.PATH ?? ''}`;
+  env.AI_V2_TASK_ID = spec.taskId;
+  return env;
+}
+
 // Task-owned process bookkeeping lives in ./procs so that agents and checks
 // share one registry (and one definition of "this task's processes").
 
@@ -292,7 +309,7 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
     // kill(-pgid). Without this the child joins the SERVER's process group and
     // nothing task-scoped is killable.
     const child = spawn(argv[0], argv.slice(1), {
-      cwd: spec.cwd, env: subscriptionEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+      cwd: spec.cwd, env: agentEnv(spec), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
     });
     const handle: RunHandle = { taskId: spec.taskId, runId: spec.runId ?? '', pid: child.pid ?? 0,
       pgid: child.pid ?? 0, kind: 'agent', label: `${spec.agent} ${spec.phase}`, cwd: spec.cwd, startedAt: Date.now() };

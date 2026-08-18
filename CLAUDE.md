@@ -24,7 +24,23 @@ Rules:
   It does NOT model event coupling (@OnEvent / emit / queue processors); V2 has a separate
   deterministic event-coupling index for that.
 
-Note for review/investigation agents: Autopilot V2 supplies any needed graph context
-directly in your prompt, already pinned to the SHA under analysis. Do not read the
-graphify skill documentation and do not run graphify yourself during a review —
-spend your tool budget on the actual source, tests and config instead.
+## How agents reach the graph
+
+Use the V2 wrapper. It is on your PATH and already pinned to the graph built from
+exactly the code you are working on:
+
+    graphify-task status
+    graphify-task query "<question>"
+    graphify-task affected "<File.ts>"
+    graphify-task explain "<symbol>"
+
+Do NOT probe with `command -v graphify`, do NOT look for ./graphify-out/, do NOT
+invoke the graphify binary directly, and do NOT read the graphify skill
+documentation under .claude/skills or .agents/skills. None of those tell you
+anything about the real graph here, and reading them only burns your tool budget.
+`graphify-task status` is the single source of truth for availability; your prompt
+also carries a GRAPHIFY STATUS block generated from the same data.
+
+Graphify is navigation only. Spend the rest of your budget on actual source,
+tests and config, and confirm anything the graph suggests in current source
+before you rely on it.

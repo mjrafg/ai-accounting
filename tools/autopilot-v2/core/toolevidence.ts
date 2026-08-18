@@ -10,8 +10,33 @@
  * always wins.
  */
 
+/** A graphify-task JSON receipt, as printed by the wrapper. */
+function parseWrapperReceipt(out: string): {
+  ok: boolean; graphSourceSha?: string; analyzedSourceSha?: string; graphifyVersion?: string;
+} | null {
+  const start = out.indexOf('{');
+  const end = out.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const o = JSON.parse(out.slice(start, end + 1));
+    if (typeof o !== 'object' || o === null) return null;
+    if (!('operation' in o) && !('graphifyVersion' in o)) return null;
+    return {
+      ok: o.ok === true && o.available !== false,
+      graphSourceSha: typeof o.graphSourceSha === 'string' ? o.graphSourceSha : undefined,
+      analyzedSourceSha: typeof o.analyzedSourceSha === 'string' ? o.analyzedSourceSha : undefined,
+      graphifyVersion: typeof o.graphifyVersion === 'string' ? o.graphifyVersion : undefined,
+    };
+  } catch { return null; }
+}
+
 export interface ToolEvidence {
   sourceInspected: boolean;
+  /** The agent ran the interface, whether or not it returned a usable graph. */
+  graphifyAttempted?: boolean;
+  graphifyOperations?: number;
+  graphifyVersion?: string | null;
+  analyzedSourceSha?: string | null;
   filesInspected: string[];
   commandsExecuted: string[];
   graphifyUsed: boolean;
@@ -30,7 +55,10 @@ const READ_CMD = /(^|[|;&\s])(cat|sed|head|tail|nl|rg|grep|less|awk|find|ls)\b/;
  * a `cat`/`sed` of skill documentation must never count as usage.
  */
 const GRAPHIFY_INVOCATION =
-  /(?:^|[|;&\s])(?:[\w./-]*\/)?graphify\s+(query|affected|path|explain|god-nodes|update|tree|diagnose|merge-graphs|cluster-only)\b/;
+  // The leading class must include quote and paren characters: agents run
+  // commands as `/bin/bash -lc 'graphify-task query "..."'`, so the character
+  // before the binary is usually a quote, not whitespace.
+  /(?:^|[|;&\s'"`(])(?:[\w./-]*\/)?graphify(?:-task)?\s+(status|query|affected|path|explain|god-nodes|update|tree|diagnose|merge-graphs|cluster-only)\b/;
 /** Commands that constitute mechanically verifying a claim. */
 const RUNTIME_CMD = /(^|[|;&\s])(node|npx|jest|tsc|npm|pnpm|python3?)\b|node_modules\/\.bin\//;
 
@@ -53,7 +81,11 @@ export function extractToolEvidence(rawLines: string[]): ToolEvidence {
   const files = new Set<string>();
   let toolCallCount = 0;
   let graphifyObserved = false;
+  let graphifyAttempted = false;
+  let graphifyOps = 0;
   let graphShaObserved: string | null = null;
+  let analyzedShaObserved: string | null = null;
+  let graphifyVersionObserved: string | null = null;
   let runtime = false;
 
   // Counting happens at the call sites: a Bash tool_use is ONE tool call, not
@@ -65,7 +97,7 @@ export function extractToolEvidence(rawLines: string[]): ToolEvidence {
     // "graphify" (e.g. .agents/skills/graphify/SKILL.md) is not tool usage —
     // observed in TASK-V2-0010, where it produced a false graphifyUsed=true.
     if (GRAPHIFY_INVOCATION.test(cmd)) {
-      graphifyObserved = true;
+      graphifyAttempted = true;
       const m = /graphify\/([0-9a-f]{7,40})\//.exec(cmd);
       if (m) graphShaObserved = m[1];
     }
@@ -81,9 +113,24 @@ export function extractToolEvidence(rawLines: string[]): ToolEvidence {
     const it = ev?.item ?? {};
     if (it.type === 'command_execution') {
       toolCallCount += 1;
-      noteCommand(String(it.command ?? ''));
+      const cmd = String(it.command ?? '');
+      noteCommand(cmd);
       const out = String(it.aggregated_output ?? it.output ?? '');
       if (out) for (const p of pathsIn(out)) files.add(p);
+      // graphify-task emits a structured JSON receipt. When the agent runs in a
+      // read-only sandbox the wrapper cannot append to its own log, so this
+      // receipt is the machine record of the call. It is the tool's output,
+      // never the agent's narration.
+      if (out && GRAPHIFY_INVOCATION.test(cmd)) {
+        const rec = parseWrapperReceipt(out);
+        if (rec) {
+          if (rec.ok) graphifyObserved = true;
+          graphShaObserved = rec.graphSourceSha ?? graphShaObserved;
+          analyzedShaObserved = rec.analyzedSourceSha ?? analyzedShaObserved;
+          if (rec.graphifyVersion) graphifyVersionObserved = rec.graphifyVersion;
+          if (rec.ok) graphifyOps += 1;
+        }
+      }
     }
     if (it.type === 'file_read' || it.type === 'file_change') {
       toolCallCount += 1;
@@ -116,7 +163,11 @@ export function extractToolEvidence(rawLines: string[]): ToolEvidence {
     filesInspected: [...files].slice(0, 60),
     commandsExecuted: commands.slice(0, 40),
     graphifyUsed: graphifyObserved,
+    graphifyAttempted,
+    graphifyOperations: graphifyOps,
+    graphifyVersion: graphifyVersionObserved,
     graphSourceSha: graphShaObserved,
+    analyzedSourceSha: analyzedShaObserved,
     runtimeVerified: runtime,
     toolCallCount,
     claimMismatch: [],

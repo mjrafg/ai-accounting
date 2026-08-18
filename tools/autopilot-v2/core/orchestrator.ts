@@ -75,6 +75,10 @@ export class Orchestrator {
     this.events.append({ taskId, type: 'TASK_MODEL_POLICY', payload: {
       policy: rp.policy, source: opts?.modelOverrides ? 'task-overrides' : 'global-defaults',
       overrides: opts?.modelOverrides ?? null } });
+    // Entitle this task to exactly one graph: the one matching its base SHA.
+    // graphify-task resolves through this pointer, so a task can never reach
+    // another task's graph or an arbitrary path.
+    graphify.registerTask(taskId, baseSha);
     return deriveTask(this.events, taskId)!;
   }
 
@@ -235,10 +239,20 @@ export class Orchestrator {
       return { ok: false, structured: null, text: '', exitCode: null, durationMs: 0, rateLimited: false,
         failureKind: 'AGENT_EXECUTION_ERROR', error: 'task cancelled', attempts: 0, usage: null, cancelled: true };
     }
+    // Graphify status is generated here from the real cache state and handed to
+    // the agent, so availability is never something the agent has to discover
+    // (TASK-V2-0011 probed `command -v graphify`, found nothing, and silently
+    // gave up on a graph that existed).
+    const rec0 = this.task(taskId);
+    const gfyStatus = rec0 ? graphify.statusBlockFor(rec0.baseSha) : null;
+    if (gfyStatus && !spec.prompt.includes('GRAPHIFY STATUS')) {
+      runSpec = { ...runSpec, prompt: `${gfyStatus}\n\n${runSpec.prompt}` };
+    }
     const startedAt = new Date().toISOString();
     this.events.append({ taskId, type: 'AGENT_STARTED', agent: spec.agent as any, phase, payload: {
       subPhase: spec.phase, role: spec.role ?? null, provider: spec.agent,
-      requestedModel: runSpec.model ?? null, reasoningEffort: runSpec.reasoning ?? null, startedAt } });
+      requestedModel: runSpec.model ?? null, reasoningEffort: runSpec.reasoning ?? null, startedAt,
+      graphifyStatus: gfyStatus ? gfyStatus.split('\n').slice(1).join('; ') : null } });
 
     const onRetry = (kind: string, err: string) => {
       this.events.append({ taskId, type: 'NOTE', agent: spec.agent as any, phase, attempt: 2,
@@ -552,12 +566,43 @@ export class Orchestrator {
    * executed, and records the machine-observed version. Prose never becomes
    * evidence: observed always wins, and overclaims are logged.
    */
-  private recordReviewEvidence(taskId: string, phase: string, res: any): ToolEvidence {
+  private recordReviewEvidence(taskId: string, phase: string, res: any,
+    window?: { startedAt: string; finishedAt: string }): ToolEvidence {
     const observed: ToolEvidence = res.toolEvidence ?? {
       sourceInspected: false, filesInspected: [], commandsExecuted: [], graphifyUsed: false,
       graphSourceSha: null, runtimeVerified: false, toolCallCount: 0, claimMismatch: [],
     };
+    // The graphify-task wrapper writes its own invocation log. That log — not
+    // the transcript, and never agent prose — decides graphifyUsed, because
+    // only a real execution can produce an entry in it.
+    // Two machine sources, never prose:
+    //   1. the wrapper's own append-only log (richest, but unwritable from a
+    //      read-only agent sandbox such as codex's)
+    //   2. the wrapper's JSON receipt captured in the provider transcript
+    // Either is proof of a real execution; the log wins on detail when present.
+    const runs = window ? graphify.invocationsDuring(taskId, window.startedAt, window.finishedAt) : [];
+    const successful = runs.filter((r) => r.ok);
+    if (successful.length) {
+      observed.graphifyUsed = true;
+      observed.graphSourceSha = successful[0].graphSourceSha ?? observed.graphSourceSha;
+      observed.analyzedSourceSha = successful[0].analyzedSourceSha ?? observed.analyzedSourceSha;
+      observed.graphifyVersion = successful[0].graphifyVersion ?? observed.graphifyVersion;
+      observed.graphifyOperations = Math.max(observed.graphifyOperations ?? 0, successful.length);
+    }
     const ev = reconcileClaims(observed, (res.structured as any)?.evidence);
+    const rec = this.task(taskId);
+    const gfyDetail = ev.graphifyUsed ? {
+      graphifyOperations: successful.length || ev.graphifyOperations || 1,
+      graphifyVersion: successful[0]?.graphifyVersion ?? ev.graphifyVersion ?? null,
+      graphifyQueries: successful.map((r) => `${r.operation}: ${(r.query ?? '').slice(0, 80)}`).slice(0, 8),
+      graphifyFailures: runs.length - successful.length,
+      analyzedSourceSha: successful[0]?.analyzedSourceSha ?? ev.analyzedSourceSha ?? rec?.baseSha ?? null,
+      // "current" means the graph queried was built from the analyzed SHA.
+      graphCurrent: successful.length
+        ? successful.every((r) => r.graphCurrent !== false)
+        : !!(ev.graphSourceSha && ev.analyzedSourceSha && ev.graphSourceSha === ev.analyzedSourceSha),
+      graphifyEvidenceSource: successful.length ? 'wrapper-log' : 'wrapper-receipt',
+    } : { graphifyOperations: 0, graphifyFailures: runs.length, graphifyAttempted: !!ev.graphifyAttempted };
     this.events.append({ taskId, type: 'EVIDENCE', phase, agent: res.provider ?? 'codex', payload: {
       reviewEvidence: {
         sourceInspected: ev.sourceInspected,
@@ -568,6 +613,7 @@ export class Orchestrator {
         runtimeVerified: ev.runtimeVerified,
         toolCallCount: ev.toolCallCount,
         claimMismatch: ev.claimMismatch,
+        ...gfyDetail,
         summary: String((res.structured as any)?.evidence?.evidenceSummary ?? '').slice(0, 300),
       },
     } });
@@ -605,6 +651,7 @@ export class Orchestrator {
         graphify: { used: false, reason: use.usable ? 'NOT_NEEDED' : use.reason, detail: use.usable ? '' : use.detail } } });
     }
 
+    const invStartedAt = new Date().toISOString();
     const res = await this.agent(taskId, {
       agent: 'claude', cwd, readOnly: true, phase: 'investigation/claude', role: 'claude.investigation',
       timeoutMs: 20 * 60_000, requiredKeys: ['candidates'],
@@ -615,7 +662,8 @@ export class Orchestrator {
         investigationSkipped: res.error ?? 'no structured result' } });
       return null;
     }
-    const ev = this.recordReviewEvidence(taskId, 'investigation', res);
+    const invWindow = { startedAt: invStartedAt, finishedAt: new Date().toISOString() };
+    const ev = this.recordReviewEvidence(taskId, 'investigation', res, invWindow);
     const cands = ((res.structured as any).candidates ?? []).slice(0, 5);
     this.events.append({ taskId, type: 'EVIDENCE', phase: 'investigation', payload: {
       investigation: { candidateCount: cands.length, candidates: cands,
@@ -806,6 +854,7 @@ export class Orchestrator {
     for (let cycle = 0; cycle <= budget.materialCycles; cycle++) {
       const diff = this.wtm.diff(cwd, rec.baseSha).slice(0, 350_000);
       const reviewCtx = await this.buildReviewContext(taskId, cwd, rec, 'codex.codeReview');
+      const revStartedAt = new Date().toISOString();
       const rev = await this.agent(taskId, {
         agent: 'codex', cwd, phase: `review/cycle-${cycle + 1}`, role: 'codex.codeReview', timeoutMs: 20 * 60_000,
         requiredKeys: ['findings'],
@@ -817,7 +866,8 @@ export class Orchestrator {
         if (rec.risk === 'low') { this.events.append({ taskId, type: 'NOTE', payload: { reviewSkipped: rev.error } }); return 'ok'; }
         return this.escalate(taskId, 'REVIEW', `review failed [${rev.failureKind}]: ${rev.error}`);
       }
-      const reviewEvidence = this.recordReviewEvidence(taskId, 'review', rev);
+      const revWindow = { startedAt: revStartedAt, finishedAt: new Date().toISOString() };
+      const reviewEvidence = this.recordReviewEvidence(taskId, 'review', rev, revWindow);
       const findings = this.recordFindings(taskId, 'review', (rev.structured as any)?.findings ?? [], reviewEvidence);
       const material = findings.filter((f) => f.severity !== 'SUGGESTION' && policy.findingMayBlock(f) || f.severity === 'IMPORTANT');
       if (!material.length) return 'ok';
@@ -1144,6 +1194,15 @@ WORKTREE (read-only, you CAN run commands): ${cwd}
 TASK ${rec.taskId} (risk=${rec.risk}):
 ${rec.description.slice(0, 4000)}
 ${graphContext}
+GRAPHIFY: if the status block above says available: true, start with the V2
+interface — it is pinned to a graph built from exactly this code:
+    graphify-task query "<what you are tracing>"
+    graphify-task affected "<File.ts>"
+Never probe with \`command -v graphify\` or ./graphify-out/, and never read the
+graphify skill docs under .agents/skills or .claude/skills — they report nothing
+useful here. THIS PROMPT OVERRIDES AGENTS.md / CLAUDE.md on the subject of
+graphify: graphify-task is the only interface in this runtime. Graphify ranks where to look; current source decides what is true.
+
 FUNNEL — keep to this budget, do not sequentially read the repository:
 1. use the structural context above (if present) to rank suspicious modules/hotspots
 2. open roughly 10-30 genuinely relevant files — no more
@@ -1172,6 +1231,7 @@ function designPrompt(rec: TaskRecord, investigation?: string | null): string {
 - required tests and acceptance requirements.`
     : `This is a ${rec.risk.toUpperCase()} task. Keep the design CONCISE: a short plan, the affected scope, realistic risk, required tests. Do not write long invariants for a small change.`;
   return `You are the architect for an autonomous development task. Investigate the repository (read-only) and produce a design.
+If the GRAPHIFY STATUS block says available: true, you may use \`graphify-task query "..."\` / \`graphify-task affected "File.ts"\` for architecture and blast radius; never probe for the graphify binary or ./graphify-out/ yourself. Graph output is navigation only — confirm anything it suggests in current source.
 
 TASK ${rec.taskId} (risk=${rec.risk}):
 ${rec.description}
@@ -1246,9 +1306,23 @@ REQUIRED WORKFLOW — targeted, not exhaustive. Do NOT browse the whole reposito
    Never assert library behaviour, return values, versions, exports or compiler
    output from memory. Run it and quote the output.
 5. only then write findings
+
+GRAPHIFY: the status block at the top of this prompt tells you whether a graph
+matching this exact code is available. If it says available: true, you may query
+it with the V2 interface — it is already pinned to the right graph:
+    graphify-task status
+    graphify-task query "<question>"
+    graphify-task affected "<File.ts>"
+    graphify-task explain "<symbol>"
+Do NOT run \`command -v graphify\`, do NOT look for ./graphify-out/, do NOT
+invoke the graphify binary directly, and do NOT read the graphify skill docs
+under .agents/skills or .claude/skills — those all report "missing" or waste
+your budget and tell you nothing about the real graph. THIS PROMPT OVERRIDES
+AGENTS.md / CLAUDE.md: any instruction there about graphify-out/ or running the
+graphify binary is stale in this runtime; graphify-task is the only interface. Graphify is NAVIGATION ONLY, never evidence:
+anything it suggests must be confirmed in current source before you raise it.
 ${ctx.graphify ? `
-GRAPHIFY BLAST-RADIUS CONTEXT (graph sourceSha ${ctx.graphify.graphSourceSha} — matches the code under review).
-NAVIGATION ONLY, never evidence: anything it suggests must be confirmed in current source before you raise it.
+Pre-fetched blast radius (graph sourceSha ${ctx.graphify.graphSourceSha}):
 ${ctx.graphify.out.slice(0, 4000)}` : ''}${ctx.eventCoupling ? `
 EVENT COUPLING (deterministic index — imports alone miss these):
 ${ctx.eventCoupling.slice(0, 1500)}` : ''}

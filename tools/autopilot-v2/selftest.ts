@@ -473,7 +473,10 @@ async function main(): Promise<number> {
       JSON.stringify({ type: 'item.completed', item: { type: 'command_execution',
         command: 'sed -n 1,40p packages/server/src/modules/Attachments/Attachments.controller.ts' } }),
     ]);
-    check('G: real graphify invocation recorded from transcript', observedReal.graphifyUsed === true);
+    // An invocation with no captured output is an ATTEMPT, not proven usage:
+    // only a successful wrapper receipt (or log entry) establishes graphifyUsed.
+    check('G: bare graphify invocation is recorded as an attempt, not usage',
+      observedReal.graphifyAttempted === true && observedReal.graphifyUsed === false);
     check('G: graph SHA captured from the invocation', observedReal.graphSourceSha === SHA_A);
     check('G: inspected source files captured', observedReal.sourceInspected &&
       observedReal.filesInspected.some((f) => f.includes('Attachments.controller.ts')));
@@ -620,6 +623,156 @@ async function main(): Promise<number> {
     // An unrelated change must not drag the whole suite in.
     const none = eventCoupling(wt, ['packages/server/src/modules/Ledger/README.md']);
     check('unrelated non-source change couples nothing', none.events.length === 0 && none.specs.length === 0);
+  }
+
+  // ---- Graphify RUNTIME exposure (the TASK-V2-0011 regression) ------------
+  section('graphify runtime: task pointer, wrapper interface, log-backed evidence, isolation');
+  {
+    const gfy = require('./core/graphify') as typeof import('./core/graphify');
+    const te = require('./core/toolevidence') as typeof import('./core/toolevidence');
+    const { execFileSync } = require('child_process') as typeof import('child_process');
+    const GROOT = path.join(process.env.AI_V2_STATE!, 'graphify');
+    const WRAPPER = '/srv/ai-accounting/bin/graphify-task';
+    const SHA_X = 'c'.repeat(40), SHA_Y = 'd'.repeat(40);
+    const mkGraph = (sha: string) => {
+      fs.mkdirSync(path.join(GROOT, sha), { recursive: true });
+      fs.writeFileSync(path.join(GROOT, sha, 'graph.json'), JSON.stringify({ nodes: [], links: [] }));
+      fs.writeFileSync(path.join(GROOT, sha, 'meta.json'), JSON.stringify({
+        sourceSha: sha, generatedAt: new Date().toISOString(), graphifyVersion: 'graphify 0.9.46',
+        fileCount: 2, nodeCount: 7, edgeCount: 9 }));
+    };
+    mkGraph(SHA_X);
+
+    // A. a registered task resolves the graph matching its analyzed SHA
+    gfy.registerTask('TASK-V2-9601', SHA_X);
+    const ptr = JSON.parse(fs.readFileSync(path.join(GROOT, 'tasks', 'TASK-V2-9601.json'), 'utf8'));
+    check('A: task pointer records the analyzed SHA', ptr.analyzedSha === SHA_X && ptr.taskId === 'TASK-V2-9601');
+    check('A: matching SHA resolves to a usable graph',
+      gfy.isAvailable() ? gfy.graphFor(SHA_X).usable === true : true);
+
+    // B. stale SHA rejected, and the status block says so in machine-readable form
+    const staleBlock = gfy.statusBlockFor(SHA_Y);
+    check('B: stale/absent SHA is refused', gfy.graphFor(SHA_Y).usable === false);
+    check('B: status block reports unavailability, not a silent guess',
+      staleBlock.includes('available: false') && /GRAPH_STALE|NO_GRAPH|not installed/.test(staleBlock));
+
+    // C/D. status block is machine-generated and carries both SHAs when current
+    const okBlock = gfy.statusBlockFor(SHA_X);
+    if (gfy.isAvailable()) {
+      check('D: agents receive a generated status block with both SHAs',
+        okBlock.includes('available: true') && okBlock.includes(`graphSourceSha: ${SHA_X}`) &&
+        okBlock.includes(`analyzedSourceSha: ${SHA_X}`) && okBlock.includes('interface: graphify-task'));
+      check('D: block states CURRENT for an exact match', okBlock.includes('status: CURRENT'));
+    } else {
+      check('D: agents receive a generated status block with both SHAs (graphify absent)',
+        okBlock.includes('available: false'));
+      check('D: block states CURRENT for an exact match (n/a)', true);
+    }
+    check('C: missing graph degrades to guidance, never to a fabricated graph',
+      gfy.statusBlockFor('e'.repeat(40)).includes('inspect current source directly'));
+
+    // E. prose cannot fake usage; only a wrapper execution counts
+    const proseOnly = te.reconcileClaims(
+      te.extractToolEvidence([JSON.stringify({ type: 'item.completed', item: { type: 'agent_message',
+        text: 'I queried the project graph with graphify-task and confirmed the blast radius.' } })]),
+      { graphifyUsed: true });
+    check('E: prose mentioning graphify-task cannot set graphifyUsed', proseOnly.graphifyUsed === false);
+    check('E: the overclaim is recorded', proseOnly.claimMismatch.some((m) => m.includes('graphifyUsed')));
+    const realRun = te.extractToolEvidence([JSON.stringify({ type: 'item.completed',
+      item: { type: 'command_execution', command: 'graphify-task query "auth blast radius"' } })]);
+    check('E: a graphify-task call with no result is an attempt, not usage',
+      realRun.graphifyAttempted === true && realRun.graphifyUsed === false);
+    const realRunOk = te.extractToolEvidence([JSON.stringify({ type: 'item.completed',
+      item: { type: 'command_execution', command: 'graphify-task query "auth blast radius"',
+        aggregated_output: JSON.stringify({ ok: true, operation: 'query',
+          graphifyVersion: 'graphify 0.9.46', graphSourceSha: SHA_X, analyzedSourceSha: SHA_X }) } })]);
+    check('E: a graphify-task call WITH a successful receipt IS usage', realRunOk.graphifyUsed === true);
+
+    // The read-only-sandbox path: codex cannot write the wrapper log, so the
+    // wrapper's JSON receipt in the transcript is the machine record.
+    const receipt = te.extractToolEvidence([JSON.stringify({ type: 'item.completed', item: {
+      type: 'command_execution',
+      command: 'graphify-task query "auth blast radius"',
+      aggregated_output: JSON.stringify({ ok: true, operation: 'query', graphifyVersion: 'graphify 0.9.46',
+        graphSourceSha: SHA_X, analyzedSourceSha: SHA_X, graphCurrent: true, result: 'NODE ...' }) } })]);
+    check('E: wrapper receipt in a read-only sandbox counts as real usage', receipt.graphifyUsed === true);
+    check('E: receipt carries both SHAs and the version',
+      receipt.graphSourceSha === SHA_X && receipt.analyzedSourceSha === SHA_X &&
+      receipt.graphifyVersion === 'graphify 0.9.46');
+    const failedReceipt = te.extractToolEvidence([JSON.stringify({ type: 'item.completed', item: {
+      type: 'command_execution', command: 'graphify-task query "x"',
+      aggregated_output: JSON.stringify({ ok: false, operation: 'query', available: false, reason: 'GRAPH_STALE' }) } })]);
+    check('E: a FAILED wrapper call is not counted as usage', failedReceipt.graphifyUsed === false);
+    check('E: but the attempt is recorded', failedReceipt.graphifyAttempted === true);
+
+    // The exact shape agents actually emit: bash -lc with the command quoted.
+    const bashWrapped = te.extractToolEvidence([JSON.stringify({ type: 'item.completed', item: {
+      type: 'command_execution',
+      command: `/bin/bash -lc 'graphify-task query "auth blast radius"'`,
+      aggregated_output: JSON.stringify({ ok: true, operation: 'query', graphifyVersion: 'graphify 0.9.46',
+        graphSourceSha: SHA_X, analyzedSourceSha: SHA_X, graphCurrent: true }) } })]);
+    check('E: shell-quoted `bash -lc \'graphify-task ...\'` is recognised', bashWrapped.graphifyUsed === true);
+    check('E: shell-quoted call still yields both SHAs',
+      bashWrapped.graphSourceSha === SHA_X && bashWrapped.analyzedSourceSha === SHA_X);
+
+    // H. identical SHA reuses the cached graph rather than rebuilding
+    const u1 = gfy.graphFor(SHA_X), u2 = gfy.graphFor(SHA_X);
+    check('H: same SHA reuses the cached graph',
+      gfy.isAvailable() ? (u1 as any).graph === (u2 as any).graph : true);
+
+    // Invocation log: attribution by run window
+    const invDir = path.join(GROOT, 'invocations');
+    fs.mkdirSync(invDir, { recursive: true });
+    const t0 = new Date(Date.now() - 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const t1 = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    const older = new Date(Date.now() - 600_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    fs.writeFileSync(path.join(invDir, 'TASK-V2-9601.jsonl'), [
+      JSON.stringify({ operation: 'query', query: 'old run', ok: true, graphSourceSha: SHA_X,
+        analyzedSourceSha: SHA_X, graphCurrent: true, startedAt: older }),
+      JSON.stringify({ operation: 'affected', query: 'this run', ok: true, graphSourceSha: SHA_X,
+        analyzedSourceSha: SHA_X, graphCurrent: true, graphifyVersion: 'graphify 0.9.46', startedAt: t1 }),
+    ].join('\n') + '\n');
+    const during = gfy.invocationsDuring('TASK-V2-9601', t0, t1);
+    check('G: only invocations inside the run window are credited',
+      during.length === 1 && during[0].query === 'this run');
+    check('G: invocation carries version and both SHAs',
+      during[0].graphifyVersion === 'graphify 0.9.46' && during[0].graphSourceSha === SHA_X &&
+      during[0].analyzedSourceSha === SHA_X);
+
+    // J. one task cannot read another task's graph
+    gfy.registerTask('TASK-V2-9602', SHA_Y);
+    const other = JSON.parse(fs.readFileSync(path.join(GROOT, 'tasks', 'TASK-V2-9602.json'), 'utf8'));
+    check('J: each task points only at its own SHA',
+      other.analyzedSha === SHA_Y && ptr.analyzedSha === SHA_X);
+    check('J: no invocations leak between tasks', gfy.invocations('TASK-V2-9602').length === 0);
+
+    // F/G/I. the real wrapper on this host: argument surface + sandbox execution
+    if (fs.existsSync(WRAPPER)) {
+      const runWrapper = (args: string[], cwd?: string) => {
+        try {
+          return { out: execFileSync(WRAPPER, args, { encoding: 'utf8', timeout: 60_000,
+            cwd: cwd ?? '/tmp', env: { ...process.env, AI_V2_TASK_ID: '' } }), code: 0 };
+        } catch (e: any) { return { out: String(e.stdout ?? '') + String(e.stderr ?? ''), code: e.status ?? 1 }; }
+      };
+      const bogusOp = runWrapper(['definitely-not-an-op']);
+      check('F: unknown operation refused', /unknown operation/.test(bogusOp.out));
+      const withFlag = runWrapper(['query', '--graph']);
+      check('G: CLI flags refused', /flags are not accepted/.test(withFlag.out));
+      const withPath = runWrapper(['query', '/etc/passwd']);
+      // A path is accepted only as free text; it can never select a graph.
+      check('F: arbitrary graph path cannot be supplied',
+        !withPath.out.includes('/etc/passwd\n  graph') && !/--graph \/etc/.test(withPath.out));
+      const noCtx = runWrapper(['status']);
+      check('F: outside a task there is no graph context at all',
+        /NO_TASK_CONTEXT/.test(noCtx.out));
+      check('I: wrapper is executable in this runtime', bogusOp.out.length > 0);
+    } else {
+      check('F: unknown operation refused (wrapper absent here)', true);
+      check('G: CLI flags refused (wrapper absent here)', true);
+      check('F: arbitrary graph path cannot be supplied (wrapper absent here)', true);
+      check('F: outside a task there is no graph context (wrapper absent here)', true);
+      check('I: wrapper is executable in this runtime (absent here)', true);
+    }
   }
 
   // ---- real cancellation ---------------------------------------------------
