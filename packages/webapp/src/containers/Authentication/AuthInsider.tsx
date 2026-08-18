@@ -4,7 +4,7 @@
  * `AuthInsider` is a layout component, not a routed page: it wraps whatever a
  * page renders in `AuthInsiderContent` and appends the optional
  * `AuthCopyright` footer. It is consumed by `Login`, `RegisterUserForm`,
- * `ResetPassword`, `SendResetPassword`, `InviteAccept` and `RegisterVerify`.
+ * `ResetPassword`, `SendResetPassword`, `Invite` and `RegisterVerify`.
  * The first five are mounted by `@/routes/authentication` inside the
  * `Authentication.tsx` shell — that shell contributes the page background,
  * logo, `AuthMetaBootProvider` and route transitions, so this component only
