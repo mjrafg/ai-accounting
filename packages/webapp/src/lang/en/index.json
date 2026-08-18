@@ -22,6 +22,7 @@
   "login_show_password": "Show Password",
   "login_hide_password": "Hide Password",
   "login_show_characters": "Show characters",
+  "login_show_characters_aria": "Show or hide the characters you typed",
   "login_hide_characters": "Hide characters",
   "dont_have_an_account": "Don't have an account?",
   "sign_up": "Sign up",
