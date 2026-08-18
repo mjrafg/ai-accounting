@@ -79,6 +79,7 @@ export class Orchestrator {
     // graphify-task resolves through this pointer, so a task can never reach
     // another task's graph or an arbitrary path.
     graphify.registerTask(taskId, baseSha);
+    this.ensureGraphFor(baseSha);
     return deriveTask(this.events, taskId)!;
   }
 
@@ -173,6 +174,30 @@ export class Orchestrator {
     this.events.append({ taskId, type: 'STATE_CHANGED', phase: 'recovery', payload: { from: rec.state, to: last, recoveredBy: by } });
     this.stream.append(taskId, 'system', 'lifecycle', `recovered from CANCELLED by ${by} → ${last}`);
     return true;
+  }
+
+  /**
+   * Keeps the graph cache moving with origin/main.
+   *
+   * When main advances, the existing graph becomes stale for every new task and
+   * — until this existed — stayed stale until somebody pressed Rebuild, so task
+   * after task silently reviewed without blast-radius context. The rebuild is
+   * asynchronous and never gates the task: the task proceeds on direct source
+   * inspection and later tasks on the same SHA get the finished graph.
+   */
+  private ensureGraphFor(baseSha: string): void {
+    if (!graphify.isAvailable()) return;
+    if (graphify.graphFor(baseSha).usable) return;
+    if (graphify.isBuilding()) return;
+    setImmediate(() => {
+      graphify.buildGraph(baseSha, this.repo, (dir, atSha) => {
+        execFileSync('git', ['-C', this.repo, 'worktree', 'add', '--detach', dir, atSha],
+          { encoding: 'utf8', timeout: 600_000 });
+      }).then((r) => {
+        this.events.append({ taskId: 'SYSTEM-SETTINGS', type: 'NOTE', payload: {
+          graphAutoRebuild: { sha: baseSha, ok: r.ok, detail: r.detail } } });
+      }).catch(() => { /* the graph is an optimisation, never a dependency */ });
+    });
   }
 
   /** True once cancellation was requested — checked everywhere before mutating. */
