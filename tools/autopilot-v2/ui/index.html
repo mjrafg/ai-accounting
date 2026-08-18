@@ -128,6 +128,74 @@ const SC = s => ["DEPLOYED","MERGED","READY_TO_MERGE","READY_TO_DEPLOY"].include
   : ["AWAITING_HUMAN","PAUSED_RATE_LIMIT","PAUSED"].includes(s) ? "s-warn"
   : ["CANCELLED","NEW"].includes(s) ? "s-idle" : "s-run";
 
+// ---- ROUTING --------------------------------------------------------------
+// The URL is the source of truth for which view is shown, so browser back and
+// forward, reload, and shared deep links all work. Navigation goes through
+// go(); popstate replays a URL WITHOUT pushing a new entry (that would trap
+// the user in the history stack).
+const TASK_TABS = ["overview","live","design","findings","tests","evidence","diff","report"];
+
+function urlFor(st) {
+  if (st.view === "task") return "/tasks/" + st.taskId + (st.tab && st.tab !== "overview" ? "/" + st.tab : "");
+  if (st.view === "legacy") return "/legacy/" + st.taskId;
+  if (st.view === "obs") return "/observatory";
+  if (st.view === "system") return "/system";
+  return "/";
+}
+function parseUrl(pathname) {
+  let m = /^\/tasks\/(TASK-V2-\d+)(?:\/([a-z]+))?$/.exec(pathname);
+  if (m) return { view: "task", taskId: m[1], tab: TASK_TABS.includes(m[2]) ? m[2] : "overview" };
+  m = /^\/legacy\/(TASK-\d+)$/.exec(pathname);
+  if (m) return { view: "legacy", taskId: m[1], tab: null };
+  if (pathname === "/observatory") return { view: "obs", taskId: null, tab: null };
+  if (pathname === "/system") return { view: "system", taskId: null, tab: null };
+  return { view: "home", taskId: null, tab: null };
+}
+
+/** Enter a route: update history (unless replaying), then apply it. */
+function go(target, opts = {}) {
+  const url = urlFor(target);
+  if (!opts.replay) {
+    if (url === location.pathname) history.replaceState(target, "", url);
+    else history.pushState(target, "", url);
+  }
+  applyRoute(target);
+}
+
+/** Make the app match a route. Only tears down streams on a real task switch. */
+function applyRoute(r) {
+  const sameTask = state.view === r.view && state.taskId === r.taskId;
+  if (!sameTask) {
+    if (state.rep.timer) clearInterval(state.rep.timer);
+    state.rep = freshRep();
+    state.detail = null; state.lastId = 0;
+    for (const k of Object.keys(paneBufs)) delete paneBufs[k];
+    if (state.es) { state.es.close(); state.es = null; }
+  }
+  state.view = r.view;
+  state.taskId = r.taskId;
+  if (r.view === "task") state.tab = r.tab || "overview";
+  render();
+
+  if (r.view === "task") {
+    if (!sameTask) { loadTask(r.taskId); openStream(r.taskId); }
+    if (state.tab === "diff") loadDiff();
+    if (state.tab === "report") initReportTab(r.taskId);
+  } else if (r.view === "legacy") {
+    if (!sameTask) loadReports(r.taskId).then(() => {
+      if (state.taskId !== r.taskId) return;
+      if (!state.rep.current && state.rep.history.length) state.rep.current = state.rep.history[state.rep.history.length - 1];
+      render();
+    });
+  } else if (r.view === "obs") loadObs();
+  else if (r.view === "system") loadSys();
+}
+
+window.addEventListener("popstate", (e) => {
+  // Back/forward: honour the URL the browser moved to; never push.
+  applyRoute(e.state && e.state.view ? e.state : parseUrl(location.pathname));
+});
+
 // ---- HOME -----------------------------------------------------------------
 function viewHome() {
   const m = $("div");
@@ -249,25 +317,10 @@ function tile(t) {
 }
 
 // ---- TASK -----------------------------------------------------------------
-function goTask(id) {
-  if (state.rep.timer) clearInterval(state.rep.timer);
-  state.rep = freshRep();
-  // Cross-task isolation: nothing from the previous task may survive the
-  // switch — stale detail or pane buffers would misreport this task's state.
-  state.detail = null; state.lastId = 0;
-  for (const k of Object.keys(paneBufs)) delete paneBufs[k];
-  state.view = "task"; state.taskId = id; state.tab = "live"; render(); loadTask(id); openStream(id);
-}
-function goLegacy(id) {
-  if (state.rep.timer) clearInterval(state.rep.timer);
-  state.rep = freshRep();
-  if (state.es) { state.es.close(); state.es = null; }
-  state.view = "legacy"; state.taskId = id; render();
-  loadReports(id).then(() => {
-    if (state.rep.history.length) state.rep.current = state.rep.history[state.rep.history.length - 1];
-    render();
-  });
-}
+// Cross-task isolation and stream setup live in applyRoute, so every entry
+// point — click, deep link, back button — takes exactly the same path.
+function goTask(id) { go({ view: "task", taskId: id, tab: "live" }); }
+function goLegacy(id) { go({ view: "legacy", taskId: id, tab: null }); }
 
 async function loadTask(id) {
   try {
@@ -360,7 +413,7 @@ function viewTask() {
   const tabs = $("div", { class: "tabs" });
   for (const tab of ["overview","live","design","findings","tests","evidence","diff","report"]) {
     const b = $("button", { text: tab[0].toUpperCase()+tab.slice(1), "aria-current": String(state.tab === tab) });
-    b.onclick = () => { state.tab = tab; render(); if (tab === "diff") loadDiff(); if (tab === "report") initReportTab(t.taskId); };
+    b.onclick = () => go({ view: "task", taskId: t.taskId, tab });
     tabs.appendChild(b);
   }
   m.appendChild(tabs);
@@ -1045,11 +1098,11 @@ function render() {
   nav.textContent = "";
   [["home","Home"],["obs","Observatory"],["system","System"]].forEach(([v,label]) => {
     const b = $("button",{text:label,"aria-current":String(state.view===v)});
-    b.onclick = () => { state.view = v; render(); if (v==="obs") loadObs(); if (v==="system") loadSys(); };
+    b.onclick = () => go({ view: v, taskId: null, tab: null });
     nav.appendChild(b);
   });
   const out = $("button",{text:"Sign out"});
-  out.onclick = async () => { await api("/api/v2/logout",{method:"POST",body:"{}"}).catch(()=>{}); location.reload(); };
+  out.onclick = async () => { await api("/api/v2/logout",{method:"POST",body:"{}"}).catch(()=>{}); location.href = "/"; };
   nav.appendChild(out);
   const main = document.getElementById("main");
   main.textContent = "";
@@ -1082,7 +1135,12 @@ async function boot() {
   state.csrf = s.csrf;
   try { state.dep = await api("/api/v2/settings/deployment"); } catch { /* first paint without it */ }
   loadModelMeta().then(() => { if (state.view !== "home") render(); }); // non-blocking
-  await refresh(); render();
+  await refresh();
+  // Honour the URL we were opened with (deep link, reload, restored tab) and
+  // seed history.state so the first back/forward has something to replay.
+  const initial = parseUrl(location.pathname);
+  history.replaceState(initial, "", urlFor(initial));
+  applyRoute(initial);
   setInterval(refresh, 15000);
 }
 boot().catch(e => { document.getElementById("main").textContent = "Failed to start: " + e.message; });

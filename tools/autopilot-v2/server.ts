@@ -246,7 +246,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (p === '/healthz') return json(res, 200, { ok: true, v: 2 });
 
-  if (p === '/' || p === '/index.html') {
+  // Client-routed views. Serving the same document for these paths is what
+  // makes deep links, reload, and browser back/forward work; the client reads
+  // location.pathname and renders the matching view. Everything else still
+  // 404s — this is an explicit list, not a catch-all.
+  const APP_ROUTES = [
+    /^\/$/, /^\/index\.html$/, /^\/observatory$/, /^\/system$/,
+    /^\/tasks\/TASK-V2-\d+(?:\/(?:overview|live|design|findings|tests|evidence|diff|report))?$/,
+    /^\/legacy\/TASK-\d+$/,
+  ];
+  if (APP_ROUTES.some((re) => re.test(p))) {
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
