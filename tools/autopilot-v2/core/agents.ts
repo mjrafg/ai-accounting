@@ -20,6 +20,7 @@ import { spawn } from 'child_process';
 import { StreamLog, writeRawArtifact } from './store';
 import { parseStructured, looksRateLimited, FailureKind } from './parsers';
 import { AgentRunResult } from './types';
+import { RunHandle, registerRun, unregisterRun, signalGroup } from './procs';
 
 export const BILLING_MODE = 'SUBSCRIPTION_CLI_ONLY';
 const BANNED_ENV = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
@@ -71,6 +72,9 @@ export function codexCliVersion(): string {
 
 export type AgentName = 'claude' | 'codex' | 'claude-code';
 
+// Task-owned process bookkeeping lives in ./procs so that agents and checks
+// share one registry (and one definition of "this task's processes").
+
 export interface AgentSpec {
   agent: AgentName;
   prompt: string;
@@ -85,6 +89,10 @@ export interface AgentSpec {
   model?: string;
   /** Role id from the model registry (e.g. claude.design) — observability only here. */
   role?: string;
+  /** Identifies this pipeline execution; ties spawned processes to the run. */
+  runId?: string;
+  /** Consulted before spawning and before any retry: true = stop immediately. */
+  isCancelled?: () => boolean;
   /** Reasoning effort; provider-validated upstream. null/undefined = provider default. */
   reasoning?: string | null;
 }
@@ -277,12 +285,20 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
     const emit = (kind: string, text: string) => stream.append(spec.taskId, spec.agent, kind, text, spec.phase);
 
     stream.append(spec.taskId, spec.agent, 'lifecycle', `● started (${spec.phase})`, spec.phase);
+    // detached:true puts the child in its OWN process group (setsid), so the
+    // agent and every descendant it spawns — shells, jest, watchers, even
+    // processes that detach themselves — can be signalled as one unit with
+    // kill(-pgid). Without this the child joins the SERVER's process group and
+    // nothing task-scoped is killable.
     const child = spawn(argv[0], argv.slice(1), {
-      cwd: spec.cwd, env: subscriptionEnv(), stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: spec.cwd, env: subscriptionEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
     });
+    const handle: RunHandle = { taskId: spec.taskId, runId: spec.runId ?? '', pid: child.pid ?? 0,
+      pgid: child.pid ?? 0, kind: 'agent', label: `${spec.agent} ${spec.phase}`, cwd: spec.cwd, startedAt: Date.now() };
+    registerRun(handle);
 
     let killed = false;
-    const timer = setTimeout(() => { killed = true; try { child.kill('SIGKILL'); } catch { /* gone */ } }, spec.timeoutMs);
+    const timer = setTimeout(() => { killed = true; signalGroup(handle.pgid, 'SIGKILL'); }, spec.timeoutMs);
 
     let buf = '';
     const rawLines: string[] = [];
@@ -299,6 +315,7 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      unregisterRun(handle.pid);
       if (buf.trim()) { rawLines.push(buf); ingestLine(spec, buf, st, emit); }
       if (st.textBuf) emit('text', st.textBuf);
 
@@ -374,9 +391,13 @@ export function runAgentStreaming(spec: AgentSpec, stream: StreamLog): Promise<A
  */
 export async function runAgentBounded(spec: AgentSpec, stream: StreamLog,
   onRetry?: (kind: FailureKind, error: string) => void): Promise<AgentRunResult> {
-  let res = await runAgentStreaming(spec, stream);
+  if (spec.isCancelled?.()) return cancelledResult(spec);
+  const res = await runAgentStreaming(spec, stream);
   if (res.ok || res.rateLimited) return res;
   if (!res.failureKind) return res;
+  // A cancelled task must never get a second attempt: the original cancellation
+  // bug left a retry running for minutes after the owner clicked Cancel.
+  if (spec.isCancelled?.()) return { ...res, cancelled: true };
 
   onRetry?.(res.failureKind, res.error ?? '');
   const reminder = res.failureKind === 'AGENT_EXECUTION_ERROR' ? ''
@@ -384,5 +405,15 @@ export async function runAgentBounded(spec: AgentSpec, stream: StreamLog,
       'Finish the work, then reply with a single JSON object and nothing else — no prose, no fence. ' +
       `Required keys: ${spec.requiredKeys.join(', ')}.`;
   const second = await runAgentStreaming({ ...spec, prompt: spec.prompt + reminder }, stream);
-  return { ...second, attempts: 2 };
+  return { ...second, attempts: 2, ...(spec.isCancelled?.() ? { cancelled: true } : {}) };
+}
+
+/** A run that never started because the task was already cancelling. */
+function cancelledResult(spec: AgentSpec): AgentRunResult {
+  return {
+    ok: false, structured: null, text: '', exitCode: null, durationMs: 0,
+    rateLimited: false, failureKind: 'AGENT_EXECUTION_ERROR',
+    error: 'task cancelled before this agent started', attempts: 0, usage: null,
+    cancelled: true, role: spec.role, provider: spec.agent,
+  };
 }

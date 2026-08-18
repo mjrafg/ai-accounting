@@ -125,7 +125,7 @@ const hhmmss = t => { try { return new Date(t).toLocaleTimeString([], {hour:"2-d
 const dur = ms => ms > 3600e3 ? (ms/3600e3).toFixed(1)+"h" : ms > 60e3 ? Math.round(ms/60e3)+"m" : Math.round(ms/1e3)+"s";
 const SC = s => ["DEPLOYED","MERGED","READY_TO_MERGE","READY_TO_DEPLOY"].includes(s) ? "s-ok"
   : ["ESCALATED","FAILED"].includes(s) ? "s-bad"
-  : ["AWAITING_HUMAN","PAUSED_RATE_LIMIT","PAUSED"].includes(s) ? "s-warn"
+  : ["AWAITING_HUMAN","PAUSED_RATE_LIMIT","PAUSED","CANCELLING"].includes(s) ? "s-warn"
   : ["CANCELLED","NEW"].includes(s) ? "s-idle" : "s-run";
 
 // ---- ROUTING --------------------------------------------------------------
@@ -390,10 +390,28 @@ function viewTask() {
   ]));
   head.appendChild($("div", { style:"white-space:pre-wrap;margin-top:8px;font-size:13.5px;color:var(--muted)", text: t.description }));
   const acts = $("div", { class: "row", style: "margin-top:10px" });
-  if (!["DEPLOYED","CANCELLED","FAILED"].includes(t.state)) {
+  if (!["DEPLOYED","CANCELLED","CANCELLING","FAILED"].includes(t.state)) {
     const cancel = $("button", { class: "btn danger", text: "Cancel" });
-    cancel.onclick = async () => { if (confirm("Cancel this task?")) { await api(`/api/v2/tasks/${t.taskId}/cancel`, { method:"POST", body:"{}" }); loadTask(t.taskId); } };
+    cancel.onclick = async () => {
+      if (!confirm("Cancel this task? Running agents and their child processes will be terminated.")) return;
+      cancel.disabled = true; cancel.textContent = "Cancelling…";
+      try {
+        const r = await api(`/api/v2/tasks/${t.taskId}/cancel`, { method:"POST", body:"{}" });
+        if (!r.cancelled) alert("Cancellation requested, but some task processes did not exit. The task stays CANCELLING — check the Live tab.");
+      } catch (e) { alert(e.message); }
+      cancel.disabled = false; cancel.textContent = "Cancel";
+      loadTask(t.taskId);
+    };
     acts.appendChild(cancel);
+  }
+  if (t.state === "CANCELLED") {
+    const rec = $("button", { class: "btn sec", text: "Recover cancelled task" });
+    rec.onclick = async () => {
+      if (!confirm("Recover this cancelled task and continue running it?")) return;
+      try { await api(`/api/v2/tasks/${t.taskId}/recover`, { method:"POST", body:"{}" }); loadTask(t.taskId); }
+      catch (e) { alert(e.message); }
+    };
+    acts.appendChild(rec);
   }
   if (["ESCALATED","PAUSED_RATE_LIMIT","PAUSED"].includes(t.state)) {
     const res = $("button", { class: "btn sec", text: "Resume" });

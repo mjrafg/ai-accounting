@@ -17,6 +17,7 @@ import {
 } from './types';
 import { EventStore, StreamLog, deriveTask, currentDesign, allFindings, STATE_ROOT } from './store';
 import { runAgentBounded, bannedKeysPresent, AgentSpec } from './agents';
+import * as procs from './procs';
 import { WorktreeManager } from './worktrees';
 import * as checks from './checks';
 import * as policy from './policy';
@@ -31,6 +32,8 @@ const MERGE_WT = path.join(STATE_ROOT, 'merge-main');
 export class Orchestrator {
   readonly wtm: WorktreeManager;
   private running = new Set<string>();
+  /** Cancellation tokens: set the moment the owner clicks Cancel. */
+  private cancelled = new Set<string>();
 
   constructor(
     readonly events: EventStore,
@@ -76,6 +79,12 @@ export class Orchestrator {
 
   private setState(taskId: string, from: TaskState, to: TaskState, phase = '', subPhase = '',
     extra: Record<string, unknown> = {}): void {
+    // No state progression may survive cancellation. deriveTask also ignores
+    // such events, but refusing to write them keeps the log honest.
+    if (this.isCancelled(taskId) && to !== 'CANCELLED' && to !== 'CANCELLING') {
+      this.noteAfterCancel(taskId, `state transition ${from} → ${to} refused`);
+      return;
+    }
     this.events.append({ taskId, type: 'STATE_CHANGED', phase, subPhase, payload: { from, to, ...extra } });
     this.stream.append(taskId, 'system', 'lifecycle', `state: ${from} → ${to}${subPhase ? ` (${subPhase})` : ''}`, phase);
     this.maybeAutoFinalReport(taskId, to);
@@ -97,11 +106,83 @@ export class Orchestrator {
     });
   }
 
-  cancel(taskId: string, by: string, reason: string): void {
-    this.events.append({ taskId, type: 'TASK_CANCELLED', payload: { cancelledBy: by, reason } });
-    this.stream.append(taskId, 'system', 'lifecycle', `cancelled: ${reason}`);
+  /**
+   * Real cancellation: state first goes to CANCELLING, the task's own process
+   * groups are terminated (TERM, brief grace, then KILL), and only once the
+   * tree is verified gone does the task become CANCELLED. The task stays in the
+   * `running` set until then so no second pipeline can start underneath us.
+   */
+  async cancel(taskId: string, by: string, reason: string): Promise<{ cancelled: boolean; evidence: unknown }> {
+    const rec = this.task(taskId);
+    if (rec && (rec.state === 'CANCELLED' || rec.state === 'CANCELLING')) {
+      return { cancelled: rec.state === 'CANCELLED', evidence: 'already cancelling/cancelled' };
+    }
+    this.cancelled.add(taskId);
+    this.events.append({ taskId, type: 'CANCEL_REQUESTED', payload: { cancelledBy: by, reason } });
+    this.stream.append(taskId, 'system', 'lifecycle', `cancelling: ${reason} — stopping task processes`);
+
+    const before = procs.runsForTask(taskId).map((h) => ({ pid: h.pid, kind: h.kind, label: h.label }));
+    const term = await procs.terminateTaskRuns(taskId, 5000);
+    this.events.append({ taskId, type: 'PROCESS_TERMINATED', payload: {
+      requestedBy: by, runsFound: before.length, runs: term.attempted, allGone: term.allGone } });
+    for (const a of term.attempted) {
+      this.stream.append(taskId, 'system', 'lifecycle',
+        `terminated ${a.label} pid ${a.pid} (group ${a.pgid})${a.forced ? ' [SIGKILL]' : ''}${a.alive ? ' — STILL ALIVE' : ''}`);
+    }
+
+    if (!term.allGone) {
+      // Stay in CANCELLING and say so; never claim CANCELLED over a live tree.
+      this.stream.append(taskId, 'system', 'error',
+        'some task processes survived termination; task stays CANCELLING for owner attention');
+      return { cancelled: false, evidence: term };
+    }
+
+    this.events.append({ taskId, type: 'TASK_CANCELLED', payload: {
+      cancelledBy: by, reason, processesTerminated: term.attempted.length, verifiedNoSurvivors: true } });
+    this.stream.append(taskId, 'system', 'lifecycle',
+      `cancelled: ${reason} (${term.attempted.length} process group(s) terminated and verified gone)`);
     this.running.delete(taskId);
     this.maybeAutoFinalReport(taskId, 'CANCELLED');
+    return { cancelled: true, evidence: term };
+  }
+
+  /**
+   * Explicit owner recovery of a cancelled task — deliberately NOT the Resume
+   * button. Clears the cancellation token and re-enters at the last live state.
+   */
+  recoverCancelled(taskId: string, by: string): boolean {
+    const rec = this.task(taskId);
+    if (!rec || (rec.state !== 'CANCELLED' && rec.state !== 'CANCELLING')) return false;
+    if (procs.runsForTask(taskId).length) return false; // never recover over live processes
+    this.cancelled.delete(taskId);
+    let last: TaskState = 'DESIGN';
+    for (const e of this.events.read(taskId)) {
+      if (e.type === 'STATE_CHANGED') {
+        const to = (e.payload as any).to as TaskState;
+        if (!['ESCALATED', 'FAILED', 'CANCELLED', 'CANCELLING', 'AWAITING_HUMAN', 'PAUSED', 'PAUSED_RATE_LIMIT'].includes(to)) last = to;
+      }
+    }
+    this.events.append({ taskId, type: 'TASK_RECOVERED', payload: { recoveredBy: by, reenteringAt: last } });
+    this.events.append({ taskId, type: 'STATE_CHANGED', phase: 'recovery', payload: { from: rec.state, to: last, recoveredBy: by } });
+    this.stream.append(taskId, 'system', 'lifecycle', `recovered from CANCELLED by ${by} → ${last}`);
+    return true;
+  }
+
+  /** True once cancellation was requested — checked everywhere before mutating. */
+  isCancelled(taskId: string): boolean {
+    if (this.cancelled.has(taskId)) return true;
+    const s = this.task(taskId)?.state;
+    return s === 'CANCELLED' || s === 'CANCELLING';
+  }
+
+  /**
+   * Records an event that arrived from a cancelled run as diagnostics only:
+   * clearly marked, never state-mutating.
+   */
+  private noteAfterCancel(taskId: string, what: string, detail: Record<string, unknown> = {}): void {
+    this.events.append({ taskId, type: 'NOTE', payload: {
+      afterCancel: 'AFTER_CANCEL / IGNORED', what, ...detail } });
+    this.stream.append(taskId, 'system', 'lifecycle', `AFTER_CANCEL / IGNORED: ${what}`);
   }
 
   isRunning(taskId: string): boolean { return this.running.has(taskId); }
@@ -145,6 +226,12 @@ export class Orchestrator {
       model: spec.model ?? rr?.model,
       reasoning: spec.reasoning !== undefined ? spec.reasoning : (rr?.reasoning ?? null),
     };
+    // Gate 1: never start an agent for a task that is cancelling.
+    if (this.isCancelled(taskId)) {
+      this.noteAfterCancel(taskId, `agent ${spec.agent} (${spec.phase}) not started`);
+      return { ok: false, structured: null, text: '', exitCode: null, durationMs: 0, rateLimited: false,
+        failureKind: 'AGENT_EXECUTION_ERROR', error: 'task cancelled', attempts: 0, usage: null, cancelled: true };
+    }
     const startedAt = new Date().toISOString();
     this.events.append({ taskId, type: 'AGENT_STARTED', agent: spec.agent as any, phase, payload: {
       subPhase: spec.phase, role: spec.role ?? null, provider: spec.agent,
@@ -154,8 +241,18 @@ export class Orchestrator {
       this.events.append({ taskId, type: 'NOTE', agent: spec.agent as any, phase, attempt: 2,
         payload: { retry: true, failureKind: kind, reason: err.slice(0, 300) } });
     };
-    let res = await runAgentBounded({ ...runSpec, taskId }, this.stream, onRetry);
+    const isCancelled = () => this.isCancelled(taskId);
+    let res = await runAgentBounded({ ...runSpec, taskId, isCancelled }, this.stream, onRetry);
     let fallbackModel: string | null = null;
+
+    // Gate 2: the run finished (or was killed) after cancellation — its result
+    // is diagnostics, never state. This is the path that previously wrote
+    // AGENT_FAILED and escalated a cancelled task.
+    if (this.isCancelled(taskId)) {
+      this.noteAfterCancel(taskId, `${spec.agent} result discarded (${spec.phase})`, {
+        exitCode: res.exitCode ?? null, failureKind: res.failureKind ?? null, durationMs: res.durationMs });
+      return { ...res, ok: false, cancelled: true, structured: null };
+    }
 
     // Model-unavailable → the role's configured fallback, SAME provider only.
     // A silent provider switch is architecturally forbidden.
@@ -204,6 +301,12 @@ export class Orchestrator {
   }
 
   private escalate(taskId: string, from: TaskState, reason: string): TaskState {
+    // Cancellation outranks failure: a killed agent must not escalate the task
+    // the owner just cancelled (the TASK-V2-0007 resurrection path).
+    if (this.isCancelled(taskId)) {
+      this.noteAfterCancel(taskId, `escalation refused: ${reason.slice(0, 160)}`);
+      return this.task(taskId)?.state ?? 'CANCELLED';
+    }
     // A pause decided by fallback policy holds; the failure that follows it
     // must not overwrite the owner-facing PAUSED state.
     if (this.task(taskId)?.state === 'PAUSED') return 'PAUSED';
@@ -230,6 +333,8 @@ export class Orchestrator {
 
   async run(taskId: string): Promise<TaskState> {
     if (this.running.has(taskId)) return this.task(taskId)!.state;
+    // A cancelled task never runs again without an explicit owner recovery.
+    if (this.isCancelled(taskId)) return this.task(taskId)?.state ?? 'CANCELLED';
     this.running.add(taskId);
     try {
       return await this.pipeline(taskId);
@@ -243,7 +348,7 @@ export class Orchestrator {
   private async pipeline(taskId: string): Promise<TaskState> {
     let rec = this.task(taskId);
     if (!rec) throw new Error(`unknown task ${taskId}`);
-    if (['CANCELLED', 'FAILED', 'DEPLOYED', 'ESCALATED'].includes(rec.state)) return rec.state;
+    if (['CANCELLED', 'CANCELLING', 'FAILED', 'DEPLOYED', 'ESCALATED'].includes(rec.state)) return rec.state;
 
     const banned = bannedKeysPresent();
     if (banned.length) return this.escalate(taskId, rec.state, `paid API keys present (${banned.join(',')}); SUBSCRIPTION_CLI_ONLY`);
@@ -377,7 +482,7 @@ export class Orchestrator {
         this.events.append({ taskId, type: 'NOTE', payload: { holdingForHumanMerge: mergeCall.reason } });
         return 'READY_TO_MERGE'; // owner approves from the UI (with MFA when enrolled)
       }
-      const merged = this.performMerge(taskId, rec, this.wtm.head(cwd), 'autopilot-policy');
+      const merged = await this.performMerge(taskId, rec, this.wtm.head(cwd), 'autopilot-policy');
       if (!merged.ok) return this.escalate(taskId, 'READY_TO_MERGE', `merge failed: ${merged.detail}`);
       this.setState(taskId, 'READY_TO_MERGE', 'MERGED', 'merge', '', {});
       rec = this.task(taskId)!;
@@ -477,7 +582,7 @@ export class Orchestrator {
         // TEST_TO_DECIDE may never leave adjudication undecided: the check runs
         // and the exit code decides, or the finding is explicitly UNRESOLVED.
         proposedCheck = a.check ? String(a.check) : null;
-        const d = checks.decideTestToDecide(cwd, String(a.findingId), proposedCheck ?? undefined);
+        const d = await checks.decideTestToDecide(cwd, String(a.findingId), proposedCheck ?? undefined, taskId);
         if (d.result) this.check(taskId, phase, d.result);
         status = d.status;
         source = d.decisionSource;
@@ -519,9 +624,9 @@ export class Orchestrator {
       payload: { impactSpecs: impact.specs, impactRationale: impact.rationale.slice(0, 30) } });
 
     const results: CheckResult[] = [];
-    results.push(this.check(taskId, 'verify', checks.typecheck(cwd)));
-    results.push(this.check(taskId, 'verify', checks.targetedTests(cwd, impact.specs)));
-    if (rec.risk === 'high') results.push(this.check(taskId, 'verify', checks.stage0(cwd)));
+    results.push(this.check(taskId, 'verify', await checks.typecheck(cwd, taskId)));
+    results.push(this.check(taskId, 'verify', await checks.targetedTests(cwd, impact.specs, taskId)));
+    if (rec.risk === 'high') results.push(this.check(taskId, 'verify', await checks.stage0(cwd, taskId)));
     for (const r of results) {
       this.events.append({ taskId, type: 'TEST_RESULT', phase: 'verify',
         payload: { name: r.name, ok: r.ok, detail: r.detail, tier: 'fast-gate', durationMs: r.durationMs } });
@@ -648,7 +753,7 @@ export class Orchestrator {
         payload: { name: r.name, ok: r.ok, detail: r.detail, tier: 'final-acceptance', durationMs: r.durationMs } });
     };
 
-    const preds = checks.runPredictionChecks(cwd, design.predictions);
+    const preds = await checks.runPredictionChecks(cwd, design.predictions, taskId);
     preds.results.forEach(record);
     if (preds.unverified.length) {
       this.events.append({ taskId, type: 'EVIDENCE', phase: 'final',
@@ -658,12 +763,12 @@ export class Orchestrator {
     if (rec.risk === 'low') {
       // fast gate already covered LOW; predictions above complete it.
     } else if (rec.risk === 'medium') {
-      record(checks.stage0(cwd));
+      record(await checks.stage0(cwd, taskId));
     } else {
       // HIGH: stage0, then Stage -1 (locked) in parallel with nothing else that
       // touches the DB — reconciliation runs after the suite completes.
-      record(checks.stage0(cwd));
-      record(checks.stageMinus1(cwd, taskId));
+      record(await checks.stage0(cwd, taskId));
+      record(await checks.stageMinus1(cwd, taskId));
       record(checks.perDocumentReconciliation());
       record(checks.cacheLedgerReconciliation());
     }
@@ -740,8 +845,12 @@ export class Orchestrator {
   }
 
   /** Merge SHA safety: approved == reviewed == branch HEAD, verified server-side. */
-  performMerge(taskId: string, rec: TaskRecord, approvedSha: string, approvedBy: string):
-    { ok: boolean; detail: string; mergeSha?: string } {
+  async performMerge(taskId: string, rec: TaskRecord, approvedSha: string, approvedBy: string):
+    Promise<{ ok: boolean; detail: string; mergeSha?: string }> {
+    if (this.isCancelled(taskId)) {
+      this.noteAfterCancel(taskId, 'merge refused');
+      return { ok: false, detail: 'task is cancelled; merge refused' };
+    }
     const branchHead = this.wtm.git(['rev-parse', rec.branch], this.repo, true).trim();
     const reviewedSha = rec.headSha;
     if (!policy.mergeShaSafe(approvedSha, reviewedSha, branchHead)) {
@@ -773,7 +882,7 @@ export class Orchestrator {
       }
       const mergeSha = g(['rev-parse', 'HEAD'], MERGE_WT).trim();
       // Post-merge sanity on the merged tree before publishing.
-      const t = checks.typecheck(MERGE_WT);
+      const t = await checks.typecheck(MERGE_WT, taskId);
       this.check(taskId, 'merge', t);
       if (!t.ok) {
         g(['reset', '--hard', 'origin/main'], MERGE_WT);
@@ -799,6 +908,10 @@ export class Orchestrator {
   }
 
   performDeploy(taskId: string, approvedBy: string): { ok: boolean; detail: string } {
+    if (this.isCancelled(taskId)) {
+      this.noteAfterCancel(taskId, 'deploy refused');
+      return { ok: false, detail: 'task is cancelled; deploy refused' };
+    }
     if (!checks.deployLock.tryAcquire(taskId)) return { ok: false, detail: `deploy lock busy` };
     try {
       const pre = spawnSync(DEPLOY_BIN, ['preflight'], { encoding: 'utf8', timeout: 180_000 });
@@ -834,6 +947,9 @@ export class Orchestrator {
    */
   retryFromEscalation(taskId: string, by: string): boolean {
     const rec = this.task(taskId);
+    // Cancelled tasks are not resumable. Recovery is a deliberate, separate
+    // owner action (recoverCancelled), never an ordinary Resume click.
+    if (this.isCancelled(taskId)) return false;
     if (!rec || (rec.state !== 'ESCALATED' && rec.state !== 'PAUSED')) return false;
     const evs = this.events.read(taskId);
     let last: TaskState = 'DESIGN';
@@ -857,6 +973,7 @@ export class Orchestrator {
 
   resolveHumanDecision(taskId: string, decisionId: string, choice: string, by: string): boolean {
     const rec = this.task(taskId);
+    if (this.isCancelled(taskId)) return false;
     if (!rec?.awaitingHuman || rec.awaitingHuman.decisionId !== decisionId) return false;
     this.events.append({ taskId, type: 'HUMAN_DECISION', payload: { decisionId, choice, decidedBy: by } });
     this.setState(taskId, 'AWAITING_HUMAN', 'REVIEW', 'human', 'resolved', {});

@@ -196,17 +196,29 @@ export function deriveTask(events: EventStore, taskId: string): TaskRecord | nul
     worktree: String(p.worktree ?? ''),
     awaitingHuman: null,
   };
+  // Cancellation is ABSORBING: once the owner cancels, no later event may move
+  // the task back into a live or escalated state. Without this a late
+  // AGENT_FAILED from the killed process resurrected TASK-V2-0007 into
+  // ESCALATED four minutes after it was cancelled.
+  let cancelRequested = false;
   for (const e of evs) {
+    if (e.type === 'CANCEL_REQUESTED') { cancelRequested = true; rec.state = 'CANCELLING'; rec.cancelledAt = e.ts; continue; }
+    // Only an explicit owner recovery lifts the absorbing cancellation.
+    if (e.type === 'TASK_RECOVERED') { cancelRequested = false; rec.cancelledAt = undefined; continue; }
+    if (e.type === 'TASK_CANCELLED') { cancelRequested = true; rec.state = 'CANCELLED'; rec.cancelledAt = rec.cancelledAt ?? e.ts; continue; }
     if (e.type === 'STATE_CHANGED') {
-      rec.state = (e.payload as any).to;
+      const to = (e.payload as any).to as TaskState;
+      // After cancellation only the cancellation states themselves are allowed.
+      if (cancelRequested && to !== 'CANCELLED' && to !== 'CANCELLING') continue;
+      rec.state = to;
       rec.phase = e.phase ?? rec.phase;
       rec.subPhase = e.subPhase ?? '';
       if ((e.payload as any).awaiting) rec.awaitingHuman = (e.payload as any).awaiting;
       if (rec.state !== 'AWAITING_HUMAN') rec.awaitingHuman = null;
+      continue;
     }
-    if (e.type === 'CODE_CHANGE' && (e.payload as any).headSha) rec.headSha = (e.payload as any).headSha;
-    if (e.type === 'TASK_CANCELLED') rec.state = 'CANCELLED';
-    if (e.type === 'NOTE' && (e.payload as any).lastError) rec.lastError = String((e.payload as any).lastError);
+    if (e.type === 'CODE_CHANGE' && (e.payload as any).headSha && !cancelRequested) rec.headSha = (e.payload as any).headSha;
+    if (e.type === 'NOTE' && (e.payload as any).lastError && !cancelRequested) rec.lastError = String((e.payload as any).lastError);
   }
   return rec;
 }

@@ -375,24 +375,24 @@ async function main(): Promise<number> {
     check('unterminated quote flagged', splitCommand('node -e "x').unquotedMeta !== null);
 
     // execution: exit code decides; the undecided status can never survive
-    const rejected = decideTestToDecide(wt, 'R-1', 'cd packages/server && node -e "process.exit(0)"');
+    const rejected = await decideTestToDecide(wt, 'R-1', 'cd packages/server && node -e "process.exit(0)"');
     check('exit 0 → finding DETERMINISTICALLY_REJECTED (code is right)',
       rejected.status === 'DETERMINISTICALLY_REJECTED' && rejected.decisionSource === 'deterministic');
     check('deterministic result named for the finding', rejected.result?.name === 'test-to-decide:R-1');
-    const confirmed = decideTestToDecide(wt, 'R-2', 'node -e "process.exit(1)"');
+    const confirmed = await decideTestToDecide(wt, 'R-2', 'node -e "process.exit(1)"');
     check('exit 1 → finding DETERMINISTICALLY_CONFIRMED', confirmed.status === 'DETERMINISTICALLY_CONFIRMED');
-    const unrunnable = decideTestToDecide(wt, 'R-3', 'rm -rf /tmp/x');
+    const unrunnable = await decideTestToDecide(wt, 'R-3', 'rm -rf /tmp/x');
     check('non-safelisted check → UNRESOLVED with reason, never silently passing',
       unrunnable.status === 'UNRESOLVED' && unrunnable.decisionSource === 'policy' &&
       unrunnable.evidence.includes('could not be executed'));
-    const noCheck = decideTestToDecide(wt, 'R-4', undefined);
+    const noCheck = await decideTestToDecide(wt, 'R-4', undefined);
     check('TEST_TO_DECIDE without a check → UNRESOLVED', noCheck.status === 'UNRESOLVED');
     for (const d of [rejected, confirmed, unrunnable, noCheck]) {
       check(`no path returns the undecided status (${d.status})`, (d.status as string) !== 'TEST_TO_DECIDE');
     }
 
     // prediction checks accept the same previously-rejected shapes
-    const pred = runPredictionChecks(wt, [
+    const pred = await runPredictionChecks(wt, [
       { text: 'spec passes', check: 'cd packages/server && node -e "process.exit(0)"' },
       { text: 'prose only' },
     ]);
@@ -408,7 +408,7 @@ async function main(): Promise<number> {
     ev.append({ taskId: tid, type: 'FINDING', phase: 'review', payload: { findings: [{
       findingId: 'R-1', severity: 'IMPORTANT', category: 'test correctness',
       claim: 'expects the wrong extension', scenario: 'concrete scenario text long enough', status: 'UNRESOLVED' }] } });
-    const dec = decideTestToDecide(wt, 'R-1', 'node -e "process.exit(0)"');
+    const dec = await decideTestToDecide(wt, 'R-1', 'node -e "process.exit(0)"');
     ev.append({ taskId: tid, type: 'DETERMINISTIC_CHECK', phase: 'review', payload: { ...dec.result } });
     ev.append({ taskId: tid, type: 'ADJUDICATION', phase: 'review', payload: {
       findingId: 'R-1', status: dec.status, decisionSource: dec.decisionSource, evidence: dec.evidence } });
@@ -419,6 +419,104 @@ async function main(): Promise<number> {
       ['UNRESOLVED', 'FIX', 'DETERMINISTICALLY_CONFIRMED'].includes(f.status));
     check('review-loop filters: nothing to fix, nothing open → REVIEW exits automatically',
       toFix.length === 0 && openMaterial.length === 0);
+  }
+
+  // ---- real cancellation ---------------------------------------------------
+  section('cancellation: process-group kill, verified termination, late-result rejection');
+  {
+    const { spawn } = require('child_process') as typeof import('child_process');
+    const procs = require('./core/procs') as typeof import('./core/procs');
+    const wt = fs.mkdtempSync(path.join(TMP, 'cancel-'));
+
+    // A long-lived process in its OWN group, exactly as agents/checks spawn.
+    const startFake = (taskId: string, label: string, withChild: boolean) => {
+      const script = withChild
+        // parent spawns a child that outlives a naive parent-only kill
+        ? 'const {spawn}=require("child_process");const c=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});console.log(c.pid);setInterval(()=>{},1000);'
+        : 'setInterval(()=>{},1000);';
+      const child = spawn(process.execPath, ['-e', script], { cwd: wt, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+      procs.registerRun({ taskId, runId: 'r1', pid: child.pid!, pgid: child.pid!, kind: 'agent', label, cwd: wt, startedAt: Date.now() });
+      return child;
+    };
+    const waitFor = async (fn: () => boolean, ms = 5000) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end && !fn()) await new Promise((r) => setTimeout(r, 100));
+      return fn();
+    };
+
+    // A. long-running fake agent → cancel → process exits
+    const a = startFake('TASK-V2-9401', 'fake-agent', false);
+    check('A: fake agent is running', procs.isAlive(a.pid!));
+    const ra = await procs.terminateTaskRuns('TASK-V2-9401', 3000);
+    check('A: termination reports all gone', ra.allGone);
+    check('A: process really exited', !procs.isAlive(a.pid!));
+
+    // B. agent starts a child → cancel → BOTH terminate (process-group proof)
+    const b = startFake('TASK-V2-9402', 'fake-agent-with-child', true);
+    const childPid = await new Promise<number>((resolve) => {
+      let buf = '';
+      b.stdout!.on('data', (d: Buffer) => { buf += d.toString(); const n = Number(buf.trim()); if (n) resolve(n); });
+    });
+    check('B: parent and child both running', procs.isAlive(b.pid!) && procs.isAlive(childPid));
+    const rb = await procs.terminateTaskRuns('TASK-V2-9402', 3000);
+    check('B: parent terminated', rb.allGone && !procs.isAlive(b.pid!));
+    check('B: CHILD terminated too (whole process group)', await waitFor(() => !procs.isAlive(childPid)));
+
+    // D. cancelling TASK-A must not touch TASK-B
+    const ta = startFake('TASK-V2-9403', 'task-a', false);
+    const tb = startFake('TASK-V2-9404', 'task-b', false);
+    await procs.terminateTaskRuns('TASK-V2-9403', 3000);
+    check('D: cancelled task A is gone', !procs.isAlive(ta.pid!));
+    check('D: unrelated task B untouched', procs.isAlive(tb.pid!));
+    check('D: registry still owns only task B', procs.runsForTask('TASK-V2-9404').length === 1 &&
+      procs.runsForTask('TASK-V2-9403').length === 0);
+    await procs.terminateTaskRuns('TASK-V2-9404', 3000); // cleanup
+
+    // E. cancel during a check (tests) terminates the test process group
+    const e = startFake('TASK-V2-9405', 'jest', false);
+    const re = await procs.terminateTaskRuns('TASK-V2-9405', 3000);
+    check('E: running test process terminated by cancel', re.allGone && !procs.isAlive(e.pid!));
+
+    // Signal-safety: the registry never targets pid<=1 (init / our own group)
+    check('safety: pgid 0 refused', !procs.signalGroup(0, 'SIGTERM'));
+    check('safety: pgid 1 (init) refused', !procs.signalGroup(1, 'SIGTERM'));
+
+    // C. late agent result after cancel must be ignored; task stays CANCELLED
+    const ev = new EventStore();
+    const cid = 'TASK-V2-9406';
+    ev.append({ taskId: cid, type: 'TASK_CREATED', payload: { title: 't', description: 'd', risk: 'medium', branch: 'b', baseSha: 'a1', worktree: wt } });
+    ev.append({ taskId: cid, type: 'STATE_CHANGED', payload: { from: 'NEW', to: 'DESIGN' } });
+    ev.append({ taskId: cid, type: 'CANCEL_REQUESTED', payload: { cancelledBy: 'owner', reason: 'stop' } });
+    check('C: CANCEL_REQUESTED shows CANCELLING', deriveTask(ev, cid)!.state === 'CANCELLING');
+    ev.append({ taskId: cid, type: 'PROCESS_TERMINATED', payload: { allGone: true, runs: [] } });
+    ev.append({ taskId: cid, type: 'TASK_CANCELLED', payload: { cancelledBy: 'owner', reason: 'stop', verifiedNoSurvivors: true } });
+    check('C: verified termination → CANCELLED', deriveTask(ev, cid)!.state === 'CANCELLED');
+    // the exact TASK-V2-0007 resurrection: a late failure + escalation
+    ev.append({ taskId: cid, type: 'AGENT_FAILED', agent: 'claude', payload: { ok: false, exitCode: 143, error: 'killed' } });
+    ev.append({ taskId: cid, type: 'STATE_CHANGED', payload: { from: 'DESIGN', to: 'ESCALATED' } });
+    check('C: late AGENT_FAILED + ESCALATED cannot resurrect the task',
+      deriveTask(ev, cid)!.state === 'CANCELLED');
+    ev.append({ taskId: cid, type: 'CODE_CHANGE', payload: { headSha: 'deadbeef123', filesChanged: ['x.ts'] } });
+    check('C: late CODE_CHANGE does not move HEAD', deriveTask(ev, cid)!.headSha === 'a1');
+    ev.append({ taskId: cid, type: 'STATE_CHANGED', payload: { from: 'X', to: 'READY_TO_MERGE' } });
+    ev.append({ taskId: cid, type: 'STATE_CHANGED', payload: { from: 'X', to: 'DEPLOYED' } });
+    check('C: late merge/deploy progression ignored', deriveTask(ev, cid)!.state === 'CANCELLED');
+    check('C: event log integrity intact (nothing rewritten)', ev.verify(cid).ok);
+
+    // F. cancel during REVIEW: reviewer stops, no adjudication may follow
+    const fid = 'TASK-V2-9407';
+    ev.append({ taskId: fid, type: 'TASK_CREATED', payload: { title: 't', description: 'd', risk: 'medium', branch: 'b', baseSha: 'a1', worktree: wt } });
+    ev.append({ taskId: fid, type: 'STATE_CHANGED', payload: { from: 'VERIFY', to: 'REVIEW' } });
+    ev.append({ taskId: fid, type: 'CANCEL_REQUESTED', payload: { cancelledBy: 'owner', reason: 'stop' } });
+    ev.append({ taskId: fid, type: 'TASK_CANCELLED', payload: { cancelledBy: 'owner', reason: 'stop' } });
+    const beforeAdj = ev.read(fid).filter((x) => x.type === 'ADJUDICATION').length;
+    check('F: review cancelled → state CANCELLED', deriveTask(ev, fid)!.state === 'CANCELLED');
+    check('F: no adjudication recorded after cancel', beforeAdj === 0 &&
+      ev.read(fid).filter((x) => x.type === 'ADJUDICATION').length === 0);
+    // and an owner recovery is the ONLY way back
+    ev.append({ taskId: fid, type: 'TASK_RECOVERED', payload: { recoveredBy: 'owner', reenteringAt: 'REVIEW' } });
+    ev.append({ taskId: fid, type: 'STATE_CHANGED', phase: 'recovery', payload: { from: 'CANCELLED', to: 'REVIEW' } });
+    check('F: explicit owner recovery re-opens the task', deriveTask(ev, fid)!.state === 'REVIEW');
   }
 
   // ---- role-based model selection -----------------------------------------

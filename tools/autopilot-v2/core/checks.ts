@@ -9,7 +9,8 @@
  * explicitly retained): destructive suites must positively match a known
  * disposable endpoint, and anything carrying a production marker is refused.
  */
-import { execFile, execFileSync, spawnSync } from 'child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'child_process';
+import { RunHandle, registerRun, unregisterRun, signalGroup } from './procs';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -112,13 +113,39 @@ export const deployLock = new GlobalLock('deploy');
 // Command execution
 // ---------------------------------------------------------------------------
 
-function run(cmd: string, args: string[], cwd: string, timeoutMs: number, env?: NodeJS.ProcessEnv):
-  { code: number | null; out: string } {
-  const res = spawnSync(cmd, args, {
-    cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 128 * 1024 * 1024,
-    env: env ?? process.env, input: '',
+/**
+ * Runs a check command in its OWN process group, registered to the task.
+ *
+ * Async on purpose: the previous spawnSync blocked the event loop for the whole
+ * run, so during a jest or Stage -1 pass the control plane could not even
+ * receive the owner's Cancel request, let alone act on it. Now the loop stays
+ * responsive and the process group is killable via the task registry.
+ */
+function run(cmd: string, args: string[], cwd: string, timeoutMs: number,
+  env?: NodeJS.ProcessEnv, taskId?: string): Promise<{ code: number | null; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd, env: env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    });
+    const handle: RunHandle = { taskId: taskId ?? '', runId: '', pid: child.pid ?? 0, pgid: child.pid ?? 0,
+      kind: 'check', label: `${path.basename(cmd)} ${args[0] ?? ''}`.slice(0, 60), cwd, startedAt: Date.now() };
+    if (taskId) registerRun(handle);
+
+    let out = '';
+    const cap = (d: Buffer) => { if (out.length < 128 * 1024 * 1024) out += d.toString('utf8'); };
+    child.stdout.on('data', cap);
+    child.stderr.on('data', cap);
+
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; signalGroup(handle.pgid, 'SIGKILL'); }, timeoutMs);
+    const done = (code: number | null) => {
+      clearTimeout(timer);
+      unregisterRun(handle.pid);
+      resolve({ code: timedOut ? null : code, out });
+    };
+    child.on('close', done);
+    child.on('error', (e) => { out += `\nspawn error: ${e.message}`; done(null); });
   });
-  return { code: res.status, out: (res.stdout ?? '') + (res.stderr ?? '') };
 }
 
 const NODE_BIN = '/home/aiaccounting/.nvm/versions/node/v18.16.1/bin';
@@ -130,25 +157,25 @@ function toolEnv(): NodeJS.ProcessEnv {
 // Checks
 // ---------------------------------------------------------------------------
 
-export function typecheck(worktree: string): CheckResult {
+export async function typecheck(worktree: string, taskId?: string): Promise<CheckResult> {
   const t0 = Date.now();
   const server = path.join(worktree, 'packages/server');
-  const r = run(path.join(server, 'node_modules/.bin/tsc'), ['--noEmit', '-p', 'tsconfig.json'],
-    server, 10 * 60_000, toolEnv());
+  const r = await run(path.join(server, 'node_modules/.bin/tsc'), ['--noEmit', '-p', 'tsconfig.json'],
+    server, 10 * 60_000, toolEnv(), taskId);
   const errors = (r.out.match(/error TS\d+/g) ?? []).length;
   return { name: 'typecheck', ok: r.code === 0, durationMs: Date.now() - t0,
     detail: r.code === 0 ? '0 errors' : `${errors} error(s): ${r.out.split('\n').filter((l) => l.includes('error TS')).slice(0, 5).join(' | ').slice(0, 500)}` };
 }
 
 /** Jest unit specs by explicit file list (from impact analysis). */
-export function targetedTests(worktree: string, specFiles: string[]): CheckResult {
+export async function targetedTests(worktree: string, specFiles: string[], taskId?: string): Promise<CheckResult> {
   const t0 = Date.now();
   if (!specFiles.length) return { name: 'targeted-tests', ok: true, detail: 'no affected unit specs', durationMs: 0 };
   const server = path.join(worktree, 'packages/server');
   const regex = specFiles.map((f) => f.replace(/^packages\/server\//, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const r = run(path.join(server, 'node_modules/.bin/jest'),
+  const r = await run(path.join(server, 'node_modules/.bin/jest'),
     ['--rootDir', '.', '--testRegex', regex, '--moduleNameMapper', '{"^@/(.*)$":"<rootDir>/src/$1"}', '--passWithNoTests'],
-    server, 15 * 60_000, toolEnv());
+    server, 15 * 60_000, toolEnv(), taskId);
   const m = /Tests:\s+(?:(\d+) failed, )?(?:(\d+) skipped, )?(\d+) passed, (\d+) total/.exec(r.out);
   const failed = Number(m?.[1] ?? (r.code === 0 ? 0 : 1));
   return { name: 'targeted-tests', ok: r.code === 0, durationMs: Date.now() - t0,
@@ -156,13 +183,13 @@ export function targetedTests(worktree: string, specFiles: string[]): CheckResul
     data: { specFiles } };
 }
 
-export function stage0(worktree: string): CheckResult {
+export async function stage0(worktree: string, taskId?: string): Promise<CheckResult> {
   const t0 = Date.now();
   assertDisposableTargets(worktree);
   const server = path.join(worktree, 'packages/server');
-  const r = run(path.join(server, 'node_modules/.bin/jest'),
+  const r = await run(path.join(server, 'node_modules/.bin/jest'),
     ['--config', './test/jest-e2e.json', '--testRegex', 'stage0-.*\\.stage0-spec\\.ts$', '--forceExit'],
-    server, 20 * 60_000, toolEnv());
+    server, 20 * 60_000, toolEnv(), taskId);
   const m = /Tests:\s+(?:(\d+) failed, )?(?:(\d+) skipped, )?(\d+) passed, (\d+) total/.exec(r.out);
   return { name: 'stage0', ok: r.code === 0 && !Number(m?.[1] ?? 0), durationMs: Date.now() - t0,
     detail: m ? `${m[3]} passed, ${m[1] ?? 0} failed, ${m[2] ?? 0} skipped` : r.out.slice(-300) };
@@ -174,7 +201,7 @@ export function stage0(worktree: string): CheckResult {
  * NEW reason must surface as REVIEW_REQUIRED, and the signature baseline is
  * never rewritten automatically.
  */
-export function stageMinus1(worktree: string, holder: string): CheckResult {
+export async function stageMinus1(worktree: string, holder: string): Promise<CheckResult> {
   const t0 = Date.now();
   assertDisposableTargets(worktree);
   if (!stageMinus1Lock.tryAcquire(holder)) {
@@ -188,13 +215,13 @@ export function stageMinus1(worktree: string, holder: string): CheckResult {
     // no build output, so build it HERE, from the worktree's own source — the
     // emit under test is then the worktree's, not the control plane's.
     if (!fs.existsSync(path.join(server, 'dist', 'main.js'))) {
-      const b = run(path.join(server, 'node_modules/.bin/nest'), ['build'], server, 15 * 60_000, toolEnv());
+      const b = await run(path.join(server, 'node_modules/.bin/nest'), ['build'], server, 15 * 60_000, toolEnv(), holder);
       if (b.code !== 0) {
         return { name: 'stage-minus-1', ok: false, durationMs: Date.now() - t0,
           detail: `worktree server build failed (exit ${b.code}): ${b.out.slice(-300)}` };
       }
     }
-    const r = run('node', ['test/e2e-runner.mjs'], server, 60 * 60_000, toolEnv());
+    const r = await run('node', ['test/e2e-runner.mjs'], server, 60 * 60_000, toolEnv(), holder);
     const passed = Number(/(\d+)\s+passed/.exec(r.out)?.[1] ?? 0);
     const failed = Number(/(\d+)\s+failed/.exec(r.out)?.[1] ?? 0);
     const regressions = Number(/(\d+)\s+regressions?/.exec(r.out)?.[1] ?? (r.code === 0 ? 0 : 1));
@@ -378,8 +405,8 @@ export function splitCommand(cmd: string): { args: string[]; unquotedMeta: strin
  * Runs the predictions the design made executable. Free-prose predictions are
  * reported NOT VERIFIED rather than silently collected as documentation.
  */
-export function runPredictionChecks(worktree: string, predictions: Array<{ text: string; check?: string }>):
-  { results: CheckResult[]; unverified: string[] } {
+export async function runPredictionChecks(worktree: string, predictions: Array<{ text: string; check?: string }>,
+  taskId?: string): Promise<{ results: CheckResult[]; unverified: string[] }> {
   const results: CheckResult[] = [];
   const unverified: string[] = [];
   const server = path.join(worktree, 'packages/server');
@@ -393,7 +420,7 @@ export function runPredictionChecks(worktree: string, predictions: Array<{ text:
     }
     const t0 = Date.now();
     const [bin, ...args] = argv;
-    const r = run(bin.startsWith('node_modules') ? path.join(server, bin) : bin, args, server, 10 * 60_000, toolEnv());
+    const r = await run(bin.startsWith('node_modules') ? path.join(server, bin) : bin, args, server, 10 * 60_000, toolEnv(), taskId);
     results.push({ name: `prediction-${i + 1}`, ok: r.code === 0, durationMs: Date.now() - t0,
       detail: `${p.text.slice(0, 140)} → ${r.code === 0 ? 'HELD' : `FAILED: ${r.out.slice(-200)}`}` });
   }
@@ -407,18 +434,18 @@ export function runPredictionChecks(worktree: string, predictions: Array<{ text:
  * with the reason on the record — an unanswered evidence question must stay
  * visibly open, not silently pass review.
  */
-export function decideTestToDecide(worktree: string, findingId: string, check?: string): {
+export async function decideTestToDecide(worktree: string, findingId: string, check?: string, taskId?: string): Promise<{
   status: 'DETERMINISTICALLY_CONFIRMED' | 'DETERMINISTICALLY_REJECTED' | 'UNRESOLVED';
   decisionSource: 'deterministic' | 'policy';
   evidence: string;
   result?: CheckResult;
-} {
+}> {
   const raw = (check ?? '').trim();
   if (!raw) {
     return { status: 'UNRESOLVED', decisionSource: 'policy',
       evidence: 'adjudicated TEST_TO_DECIDE without an executable check; finding remains unresolved' };
   }
-  const { results, unverified } = runPredictionChecks(worktree, [{ text: `finding ${findingId}`, check: raw }]);
+  const { results, unverified } = await runPredictionChecks(worktree, [{ text: `finding ${findingId}`, check: raw }], taskId);
   const r = results[0];
   if (!r) {
     return { status: 'UNRESOLVED', decisionSource: 'policy',

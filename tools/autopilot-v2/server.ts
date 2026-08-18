@@ -388,8 +388,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
       if (action === 'cancel') {
         const body = await readBody(req);
-        orch.cancel(taskId, sess.user, String(body.reason ?? 'cancelled by owner'));
-        return json(res, 200, { ok: true });
+        // Awaited: the response reports whether the process tree is verified
+        // gone, so the UI never shows CANCELLED over a live agent.
+        const r = await orch.cancel(taskId, sess.user, String(body.reason ?? 'cancelled by owner'));
+        return json(res, 200, { ok: true, cancelled: r.cancelled, evidence: r.evidence });
+      }
+      if (action === 'recover') {
+        // Explicit owner recovery of a cancelled task — never automatic.
+        const ok = orch.recoverCancelled(taskId, sess.user);
+        if (ok) orch.run(taskId).catch(() => undefined);
+        return json(res, ok ? 200 : 409, { ok });
       }
       if (action === 'decision') {
         const body = await readBody(req);
@@ -408,7 +416,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         if (!rec) return json(res, 404, { error: 'unknown task' });
         // The browser submits the SHA the human reviewed; the server verifies it
         // against reviewed HEAD and branch HEAD before anything merges.
-        const r = orch.performMerge(taskId, rec, String(body.approvedSha ?? ''), sess.user);
+        const r = await orch.performMerge(taskId, rec, String(body.approvedSha ?? ''), sess.user);
         if (r.ok) orch.run(taskId).catch(() => undefined);
         return json(res, r.ok ? 200 : 409, r);
       }

@@ -25,6 +25,8 @@ export type TaskState =
   | 'PAUSED_RATE_LIMIT'
   | 'ESCALATED'
   | 'FAILED'
+  /** Cancel requested: task-owned processes are being terminated. */
+  | 'CANCELLING'
   | 'CANCELLED';
 
 export const TERMINAL_STATES: TaskState[] = ['DEPLOYED', 'ESCALATED', 'FAILED', 'CANCELLED'];
@@ -36,6 +38,9 @@ export const RESUMABLE_STATES: TaskState[] = [
 export type EventType =
   | 'TASK_CREATED'
   | 'TASK_MODEL_POLICY'
+  | 'CANCEL_REQUESTED'
+  | 'PROCESS_TERMINATED'
+  | 'TASK_RECOVERED'
   | 'STATE_CHANGED'
   | 'AGENT_STARTED'
   | 'AGENT_FINISHED'
@@ -131,6 +136,8 @@ export interface TaskRecord {
   legacy?: boolean;
   awaitingHuman?: HumanDecisionRequest | null;
   lastError?: string;
+  /** Set when the owner requested cancellation; makes the state absorbing. */
+  cancelledAt?: string;
 }
 
 /** A human question that earns its interruption. */
@@ -167,6 +174,8 @@ export interface AgentRunResult {
   role?: string;
   reasoningEffort?: string;
   provider?: string;
+  /** The run was cancelled; its output must not mutate task state. */
+  cancelled?: boolean;
 }
 
 export interface CheckResult {
